@@ -1,6 +1,7 @@
 import os
 import logging
 import secrets
+import time
 from typing import Optional, Dict, Any, Tuple
 from fastapi import HTTPException, Request
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
@@ -164,12 +165,14 @@ class ClaudeCodeAuthManager:
         """Validate that Claude Code CLI is already authenticated."""
         # For CLI authentication, we assume it's valid and let the SDK handle auth
         # The actual validation will happen when we try to use the SDK
+        # (CLAUDE_CODE_OAUTH_TOKEN from `claude setup-token` reaches the CLI via the inherited env)
         return {
             "valid": True,
             "errors": [],
             "config": {
                 "method": "Claude Code CLI authentication",
                 "note": "Using existing Claude Code CLI authentication",
+                "oauth_token_present": bool(os.getenv("CLAUDE_CODE_OAUTH_TOKEN")),
             },
         }
 
@@ -266,6 +269,17 @@ def validate_claude_code_auth() -> Tuple[bool, Dict[str, Any]]:
 
     logger.info(f"Claude Code authentication validated: {status['method']}")
     return True, status
+
+
+# Last Claude Code login failure seen on a request ({"timestamp", "kind"}), cleared
+# by the next successful completion. Shown by /v1/auth/status.
+last_auth_failure: Optional[Dict[str, Any]] = None
+
+
+def record_auth_failure(kind: Optional[str]) -> None:
+    """Remember a login failure (kind set) or clear it after a success (kind None)."""
+    global last_auth_failure
+    last_auth_failure = {"timestamp": int(time.time()), "kind": kind} if kind else None
 
 
 def get_claude_code_auth_info() -> Dict[str, Any]:

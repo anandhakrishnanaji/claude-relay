@@ -102,9 +102,38 @@ def openai_usage_counts(
     }
 
 
+# Login failure texts the bundled Claude Code CLI reports (its own UI strings,
+# plus the API's 401 error type), each mapped to a short failure kind.
+_AUTH_FAILURE_MARKERS = (
+    ("Not logged in", "not_logged_in"),
+    ("Login expired", "login_expired"),
+    ("OAuth session expired", "login_expired"),
+    ("OAuth token revoked", "token_revoked"),
+    ("Invalid API key", "invalid_api_key"),
+    ("Invalid auth token", "invalid_auth_token"),
+    ("Please run /login", "not_logged_in"),
+    ("authentication_error", "authentication_error"),
+)
+
+
+def auth_failure_kind(chunks: List[Dict[str, Any]], message: str) -> Optional[str]:
+    """The kind of Claude Code login failure behind an error message, or None."""
+    for marker, kind in _AUTH_FAILURE_MARKERS:
+        if marker in message:
+            return kind
+    for chunk in chunks:
+        # The SDK sets error="authentication_failed" on the CLI's synthetic AssistantMessage
+        if chunk.get("error") == "authentication_failed":
+            return "authentication_failed"
+        if chunk.get("api_error_status") == 401:
+            return "authentication_error"
+    return None
+
+
 def result_error(chunks: List[Dict[str, Any]]) -> Optional[Dict[str, Any]]:
     """Describe an error ResultMessage as {"status": int, "message": str}, else None.
 
+    A Claude Code login failure gets status 401 and an "auth_failure" kind.
     error_max_turns is not treated as an error here: callers keep returning
     whatever partial assistant text was produced, as before.
     """
@@ -117,5 +146,9 @@ def result_error(chunks: List[Dict[str, Any]]) -> Optional[Dict[str, Any]]:
         or result.get("result")
         or f"Claude Code returned an error ({result.get('subtype')})"
     )
+    message = str(message)
+    kind = auth_failure_kind(chunks, message)
+    if kind:
+        return {"status": 401, "message": message, "auth_failure": kind}
     status = 429 if result.get("api_error_status") == 429 else 502
-    return {"status": status, "message": str(message)}
+    return {"status": status, "message": message}
