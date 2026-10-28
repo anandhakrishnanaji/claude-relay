@@ -771,4 +771,4 @@ MIT Licence
 
 ## Contributing
 
-Contributions are welcome! Please open an issue or submit a pull request.
+Contributions are welcome! Please open an issue or submit a pull request. Maintainers: see [RELEASING.md](./RELEASING.md) for how to cut a release.
