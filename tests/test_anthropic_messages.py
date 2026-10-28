@@ -167,6 +167,58 @@ class TestAnthropicMessagesToolGating:
         assert response.status_code == 200
         assert opts["system_prompt"] == "Rule one.\n\nRule two."
 
+    def test_tool_use_tool_result_and_image_blocks(self):
+        """Tool-using clients' content blocks are accepted and rendered as text."""
+        response, opts = self._post(
+            {
+                "model": "claude-haiku-4-5-20251001",
+                "messages": [
+                    {
+                        "role": "user",
+                        "content": [
+                            {"type": "text", "text": "What's in this file?"},
+                            {
+                                "type": "image",
+                                "source": {
+                                    "type": "base64",
+                                    "media_type": "image/png",
+                                    "data": "AA",
+                                },
+                            },
+                        ],
+                    },
+                    {
+                        "role": "assistant",
+                        "content": [
+                            {"type": "text", "text": "Reading it."},
+                            {
+                                "type": "tool_use",
+                                "id": "toolu_1",
+                                "name": "read_file",
+                                "input": {"path": "a.txt"},
+                            },
+                        ],
+                    },
+                    {
+                        "role": "user",
+                        "content": [
+                            {
+                                "type": "tool_result",
+                                "tool_use_id": "toolu_1",
+                                "content": [{"type": "text", "text": "hello world"}],
+                            }
+                        ],
+                    },
+                ],
+            }
+        )
+        assert response.status_code == 200
+        prompt = opts["prompt"]
+        assert "What's in this file?" in prompt
+        assert 'Assistant: Reading it.\nTool call: read_file({"path": "a.txt"})' in prompt
+        assert "Tool result (toolu_1): hello world" in prompt
+        assert "base64" not in prompt
+
 
 class TestAnthropicMessagesEndpoint:
     """Integration tests for /v1/messages endpoint."""
