@@ -132,6 +132,16 @@ class TestSessionManager:
         assert manager.default_ttl_hours == 1
         assert manager.cleanup_interval_minutes == 5
 
+    def test_session_limit_evicts_least_recently_used(self):
+        manager = SessionManager(max_sessions=2)
+        manager.get_or_create_session("a")
+        manager.get_or_create_session("b")
+        manager.sessions["b"].last_accessed -= timedelta(minutes=1)
+        manager.get_or_create_session("a")  # existing session: no eviction, "a" is now newest
+        assert set(manager.sessions) == {"a", "b"}
+        manager.get_or_create_session("c")
+        assert set(manager.sessions) == {"a", "c"}
+
     def test_get_or_create_session_creates_new(self, manager):
         """get_or_create_session() creates new session if not exists."""
         session = manager.get_or_create_session("new-session")

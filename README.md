@@ -351,6 +351,7 @@ The `Dockerfile` in the repo root builds the same non-root image, and the includ
 | `CORS_ORIGINS` | JSON list of browser origins allowed to call the API. `["*"]` allows any origin, without credentials; only use it with `API_KEY` set. | `[]` (none) |
 | `ALLOWED_HOSTS` | Comma-separated `Host` header allow-list; wildcards like `*.example.com` are allowed. Protects against DNS rebinding. Add every name clients use (LAN IP, container name, ...). `*` disables the check. | `localhost,127.0.0.1,::1,[::1],*.localhost` |
 | `FORWARDED_ALLOW_IPS` | Comma-separated proxy IPs whose `X-Forwarded-For` is trusted for the client IP (rate limits, logs). Read by `claude-relay`; plain `uvicorn` trusts `127.0.0.1` by default. | empty (none) |
+| `MAX_SESSIONS` | Most sessions kept in memory at once. Creating one more evicts the least recently used. | `1000` |
 | `ALLOW_TOOLS` | Honour `"enable_tools": true` in requests, and allow `POST /v1/mcp/servers` and `/v1/mcp/connect` (which launch a client-chosen command). Tools run Bash/Write/Edit with permissions bypassed. When off, such requests get a 403. | `false` |
 | `CLAUDE_AUTH_METHOD` | Auth method: `cli`, `api_key`, `bedrock`, `vertex` | auto-detect |
 | `ANTHROPIC_API_KEY` | Direct Anthropic API key. Optional — also unlocks live `/v1/models` discovery and dynamic latest-Sonnet default. Not required when using Bedrock, Vertex, or Claude CLI subscription auth. | - |
