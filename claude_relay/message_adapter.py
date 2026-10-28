@@ -43,6 +43,9 @@ class MessageAdapter:
         """
         Filter content for unsupported features and tool usage.
         Remove thinking blocks, tool calls, and image references.
+
+        Output-only: never run it on incoming prompts. Coding agents (Cline, Roo
+        Code) describe their tools with these same tags in their system prompts.
         """
         if not content:
             return content

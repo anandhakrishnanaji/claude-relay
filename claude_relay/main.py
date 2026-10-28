@@ -605,11 +605,6 @@ async def generate_streaming_response(
                 system_prompt = sampling_instructions
             logger.debug(f"Added sampling instructions: {sampling_instructions}")
 
-        # Filter content for unsupported features
-        prompt = MessageAdapter.filter_content(prompt)
-        if system_prompt:
-            system_prompt = MessageAdapter.filter_content(system_prompt)
-
         # Get Claude Agent SDK options from request
         claude_options = request.to_claude_options()
 
@@ -894,11 +889,6 @@ async def chat_completions(
                     system_prompt = sampling_instructions
                 logger.debug(f"Added sampling instructions: {sampling_instructions}")
 
-            # Filter content
-            prompt = MessageAdapter.filter_content(prompt)
-            if system_prompt:
-                system_prompt = MessageAdapter.filter_content(system_prompt)
-
             # Get Claude Agent SDK options from request
             claude_options = request_body.to_claude_options()
 
@@ -1041,11 +1031,6 @@ async def anthropic_messages(
 
         prompt = "\n\n".join(prompt_parts)
         system_prompt = request_body.system_text()
-
-        # Filter content
-        prompt = MessageAdapter.filter_content(prompt)
-        if system_prompt:
-            system_prompt = MessageAdapter.filter_content(system_prompt)
 
         # Tools are disabled by default, same as /v1/chat/completions: the prompt
         # may carry untrusted text, and with tools on it would drive an agent that
