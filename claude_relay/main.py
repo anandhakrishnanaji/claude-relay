@@ -482,7 +482,7 @@ class DebugLoggingMiddleware(BaseHTTPMiddleware):
 
         # Log basic request info with request ID for correlation
         logger.debug(f"🔍 [{request_id}] Incoming request: {request.method} {request.url}")
-        logger.debug(f"🔍 [{request_id}] Headers: {dict(request.headers)}")
+        logger.debug(f"🔍 [{request_id}] Headers: {redact_headers(request.headers)}")
 
         # For POST requests, try to log body (but don't break if we can't)
         body_logged = False
@@ -541,7 +541,10 @@ async def validation_exception_handler(request: Request, exc: RequestValidationE
 
     # Log the validation error details
     logger.error(f"❌ Request validation failed for {request.method} {request.url}")
-    logger.error(f"❌ Validation errors: {exc.errors()}")
+    # Leave out "input": it can hold a whole prompt, and this logs outside debug mode too
+    logger.error(
+        f"❌ Validation errors: {[{k: v for k, v in e.items() if k != 'input'} for e in exc.errors()]}"
+    )
 
     # Create detailed error response
     error_details = []

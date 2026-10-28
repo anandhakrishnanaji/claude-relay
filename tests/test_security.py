@@ -325,3 +325,23 @@ class TestDiagnosticEndpoints:
         assert "tok-123" not in response.text
         assert "k-456" not in response.text
         assert response.json()["debug_info"]["headers"]["authorization"] == "[REDACTED]"
+
+
+class TestLogRedaction:
+    def test_debug_log_masks_authorization(self, caplog):
+        with patch.object(main, "DEBUG_MODE", True), caplog.at_level("DEBUG"):
+            TestClient(main.app, base_url="http://localhost").get(
+                "/health", headers={"Authorization": "Bearer tok-123"}
+            )
+        assert any("Headers:" in r.getMessage() for r in caplog.records)
+        assert "tok-123" not in caplog.text
+
+    def test_validation_error_log_omits_input(self, caplog):
+        body = {"model": "m", "messages": "my-secret-prompt"}
+        with caplog.at_level("ERROR"):
+            response = TestClient(main.app, base_url="http://localhost").post(
+                "/v1/chat/completions", json=body
+            )
+        assert response.status_code == 422
+        assert "Validation errors" in caplog.text
+        assert "my-secret-prompt" not in caplog.text
