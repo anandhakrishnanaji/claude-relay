@@ -1,5 +1,6 @@
 import os
 import logging
+import secrets
 from typing import Optional, Dict, Any, Tuple
 from fastapi import HTTPException, Request
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
@@ -242,7 +243,7 @@ async def verify_api_key(
         )
 
     # Verify the API key
-    if credentials.credentials != active_api_key:
+    if not secrets.compare_digest(credentials.credentials.encode(), active_api_key.encode()):
         raise HTTPException(
             status_code=401,
             detail="Invalid API key",

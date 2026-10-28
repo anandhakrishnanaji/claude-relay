@@ -405,6 +405,29 @@ class TestVerifyApiKey:
                 assert "Invalid API key" in exc_info.value.detail
 
     @pytest.mark.asyncio
+    async def test_key_compared_in_constant_time(self):
+        """The key is checked with compare_digest, and a non-ASCII key is a 401, not a crash."""
+        import claude_relay.auth
+        from fastapi.security import HTTPAuthorizationCredentials
+
+        with patch.object(
+            claude_relay.auth.auth_manager, "get_api_key", return_value="correct-key"
+        ):
+            with patch.object(
+                claude_relay.auth.secrets,
+                "compare_digest",
+                wraps=claude_relay.auth.secrets.compare_digest,
+            ) as compare:
+                ok = HTTPAuthorizationCredentials(scheme="Bearer", credentials="correct-key")
+                assert await claude_relay.auth.verify_api_key(MagicMock(), ok) is True
+                compare.assert_called_once()
+
+            bad = HTTPAuthorizationCredentials(scheme="Bearer", credentials="clé-wrong")
+            with pytest.raises(HTTPException) as exc_info:
+                await claude_relay.auth.verify_api_key(MagicMock(), bad)
+            assert exc_info.value.status_code == 401
+
+    @pytest.mark.asyncio
     async def test_missing_credentials_raises_401(self):
         """Missing credentials raise 401 HTTPException."""
         with patch.dict(os.environ, {"API_KEY": "test-key"}):
