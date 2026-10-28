@@ -5,6 +5,18 @@ description = "OpenAI- and Anthropic-compatible API server for Claude Code, usin
 authors = ["A Anandha Krishnan <creattech2000@gmail.com>"]
 readme = "README.md"
 license = "MIT"
+homepage = "https://github.com/anandhakrishnanaji/claude-relay"
+repository = "https://github.com/anandhakrishnanaji/claude-relay"
+documentation = "https://github.com/anandhakrishnanaji/claude-relay#readme"
+keywords = ["claude", "claude-code", "openai-compatible", "anthropic", "llm-proxy", "api-server", "fastapi", "claude-agent-sdk"]
+classifiers = [
+    "Development Status :: 5 - Production/Stable",
+    "Framework :: FastAPI",
+    "Intended Audience :: Developers",
+    "Programming Language :: Python :: 3",
+    "Topic :: Internet :: WWW/HTTP :: HTTP Servers",
+    "Topic :: Scientific/Engineering :: Artificial Intelligence",
+]
 packages = [{include = "src"}]
 
 [tool.poetry.dependencies]

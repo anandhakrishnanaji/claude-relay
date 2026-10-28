@@ -1,19 +1,52 @@
-# claude-relay
+<!--
+  claude-relay: a self-hosted OpenAI-compatible and Anthropic-compatible API server for Claude Code.
+  Use your Claude subscription (Pro/Max) or an Anthropic API key from any OpenAI SDK or Anthropic SDK client.
+  Python, FastAPI, Claude Agent SDK. MIT licensed.
+-->
 
-An OpenAI- and Anthropic-compatible API server for Claude Code. Point any OpenAI or Anthropic client library at it and it runs your requests through Claude Code, using your Claude subscription login or an API key.
+# claude-relay: OpenAI-compatible API for Claude Code
+
+<p>
+  <a href="https://github.com/anandhakrishnanaji/claude-relay/actions/workflows/ci.yml"><img src="https://github.com/anandhakrishnanaji/claude-relay/actions/workflows/ci.yml/badge.svg" alt="CI" /></a>
+  <a href="LICENSE"><img src="https://img.shields.io/badge/License-MIT-yellow.svg" alt="License: MIT" /></a>
+  <img src="https://img.shields.io/badge/python-3.10%20%7C%203.11%20%7C%203.12%20%7C%203.13-blue" alt="Python 3.10 to 3.13" />
+  <img src="https://img.shields.io/badge/API-OpenAI%20%2B%20Anthropic%20compatible-8A2BE2" alt="OpenAI and Anthropic compatible API" />
+</p>
+
+**claude-relay is a self-hosted API server that exposes Claude Code through the OpenAI Chat Completions API (`/v1/chat/completions`) and the Anthropic Messages API (`/v1/messages`).** Point any OpenAI or Anthropic client library at it by changing the base URL, and your requests run through Claude Code using your Claude subscription login or an Anthropic API key.
+
+```python
+from openai import OpenAI
+
+client = OpenAI(base_url="http://localhost:8000/v1", api_key="not-needed")
+reply = client.chat.completions.create(
+    model="claude-sonnet-4-6",
+    messages=[{"role": "user", "content": "Hello, Claude"}],
+)
+print(reply.choices[0].message.content)
+```
 
 **Install:** see [INSTALL.md](./INSTALL.md) for local, always-on, Docker and tailnet setups.
 
 ## Highlights
 
+- **Two APIs, one server.** OpenAI-compatible `/v1/chat/completions` and Anthropic-compatible `/v1/messages`. Chat Completions supports streaming (SSE).
 - **Honours system prompts.** Your system message replaces Claude Code's own prompt on every endpoint, and `/v1/messages` also accepts `system` as a list of text blocks, as the Anthropic SDK sends it.
 - **Tools off by default.** Both endpoints run a single turn without tools, so untrusted text in a prompt can't run commands. Send `"enable_tools": true` to give Claude its Bash/Read/Write tools.
 - **Isolated from host settings.** Requests don't load the host's `~/.claude/CLAUDE.md`, settings, skills or plugins. Set `CLAUDE_SETTING_SOURCES=user,project,local` to opt back in.
+- **Flexible auth.** Claude CLI login (subscription), `ANTHROPIC_API_KEY`, AWS Bedrock or Google Vertex AI, auto-detected.
 - **Ships deploy tooling.** `scripts/install-service.sh` sets up an always-on systemd user service, and `deploy/` has a Docker + [tsdproxy](https://github.com/almeidapaulopt/tsdproxy) setup for serving it on your tailnet. See [Always-on local service](#always-on-local-service-linux-systemd) and [Home server on your tailnet](#home-server-on-your-tailnet-docker--tsdproxy).
 
-## About
+## What is claude-relay for?
 
-The server wraps Claude Code so you can use it with any OpenAI client library. **Now powered by the official Claude Agent SDK v0.1.18** with enhanced authentication and features.
+claude-relay is for developers who want to call Claude Code from tools and code written against the OpenAI or Anthropic APIs. Typical uses:
+
+- Using an existing **OpenAI Python or JavaScript SDK** app with Claude, with only a base-URL change.
+- Connecting **chat UIs, editors and agent frameworks** that accept a custom OpenAI-compatible endpoint.
+- Sharing one **Claude Code login across machines** on a home server or tailnet.
+- Scripting Claude Code over **plain HTTP/curl** instead of the CLI.
+
+It runs on the official [Claude Agent SDK](https://pypi.org/project/claude-agent-sdk/), which bundles the Claude Code CLI, so no separate Node.js install is needed.
 
 ## Version
 
@@ -29,27 +62,8 @@ The server wraps Claude Code so you can use it with any OpenAI client library. *
 3. Restart server - that's it!
 
 **Migration Resources:**
-- [MIGRATION_STATUS.md](./MIGRATION_STATUS.md) - Detailed v2.0.0 migration status
-- [UPGRADE_PLAN.md](./UPGRADE_PLAN.md) - Comprehensive migration strategy and technical details
-
-## Status
-
-🎉 **Production Ready** - All core features working and tested:
-- ✅ Chat completions endpoint with **official Claude Agent SDK v0.1.18**
-- ✅ **Anthropic Messages API** (`/v1/messages`) for native compatibility
-- ✅ Streaming and non-streaming responses
-- ✅ Full OpenAI SDK compatibility
-- ✅ **Interactive landing page** with API explorer
-- ✅ **Multi-provider authentication** (API key, Bedrock, Vertex AI, CLI auth)
-- ✅ **System prompt support** via SDK options
-- ✅ Model selection support with validation
-- ✅ **Fast by default** - Tools disabled for OpenAI compatibility (5-10x faster)
-- ✅ Optional tool usage (Read, Write, Bash, etc.) when explicitly enabled
-- ✅ **Real-time cost and token tracking** from SDK
-- ✅ **Session continuity** with conversation history across requests
-- ✅ **Session management endpoints** for full session control
-- ✅ Health, auth status, and models endpoints
-- ✅ **Development mode** with auto-reload
+- [docs/MIGRATION_STATUS.md](./docs/MIGRATION_STATUS.md) - Detailed v2.0.0 migration status
+- [docs/UPGRADE_PLAN.md](./docs/UPGRADE_PLAN.md) - Comprehensive migration strategy and technical details
 
 ## Features
 
@@ -61,7 +75,7 @@ The server wraps Claude Code so you can use it with any OpenAI client library. *
 - Automatic model validation and selection
 
 ### 🛠 **Claude Agent SDK Integration**
-- **Official Claude Agent SDK** integration (v0.1.18) 🆕
+- **Official Claude Agent SDK** integration
 - **Real-time cost tracking** - actual costs from SDK metadata
 - **Accurate token counting** - input/output tokens from SDK
 - **Session management** - proper session IDs and continuity
@@ -108,7 +122,7 @@ export ANTHROPIC_API_KEY=your-api-key  # Recommended
 poetry run uvicorn src.main:app --reload --port 8000
 
 # 4. Test it works
-poetry run python test_endpoints.py
+poetry run python tests/test_endpoints.py
 ```
 
 🎉 **That's it!** Your OpenAI-compatible Claude Code API is running on `http://localhost:8000`
@@ -134,7 +148,7 @@ poetry run python test_endpoints.py
      ```
    - **Option C**: Use AWS Bedrock or Google Vertex AI (see Configuration section)
 
-> **Note:** The Claude Code CLI is bundled with the SDK (v0.1.18+). No separate Node.js or npm installation required!
+> **Note:** The Claude Code CLI is bundled with the Claude Agent SDK. No separate Node.js or npm installation required!
 
 ## Installation
 
@@ -724,7 +738,7 @@ See `examples/session_continuity.py` for comprehensive Python examples and `exam
 Test all endpoints with a simple script:
 ```bash
 # Make sure server is running first
-poetry run python test_endpoints.py
+poetry run python tests/test_endpoints.py
 ```
 
 ### 📝 **Basic Test Suite**
@@ -764,6 +778,26 @@ All tests should show:
 - **Authentication method detected** (claude_cli, anthropic, bedrock, or vertex)
 - **Real cost tracking** (e.g., $0.001-0.005 per test call)
 - **Accurate token counts** from SDK metadata
+
+## FAQ
+
+### Can I use my Claude Pro or Max subscription with the OpenAI SDK?
+Yes. Run `claude auth login` on the host, start claude-relay, and point the OpenAI SDK's `base_url` at `http://<host>:8000/v1`. Check the [Terms Compliance](#terms-compliance) section first: subscription use is for your own personal use.
+
+### Does it support streaming?
+On `/v1/chat/completions`, yes: pass `"stream": true` to get server-sent events. `/v1/messages` currently returns non-streaming responses only.
+
+### Does it support OpenAI function calling?
+No. OpenAI-style `tools`/function calling is not mapped. Claude Code's own tools (Bash, Read, Write and others) can be turned on per request with `"enable_tools": true`.
+
+### Which models can I use?
+Any model Claude Code accepts, such as `claude-sonnet-4-6`, `claude-opus-4-6` and `claude-haiku-4-5-20251001`. With `ANTHROPIC_API_KEY` set, `/v1/models` returns Anthropic's live list. See [Supported Models](#supported-models).
+
+### Is it safe to expose on a network?
+Set `API_KEY` so clients must send a bearer token, keep tools off unless you need them, and prefer a private network such as a tailnet. See [API Security Configuration](#-api-security-configuration).
+
+### How is this different from calling the Anthropic API directly?
+Requests go through Claude Code, so you can use a Claude subscription login instead of per-token API billing, and optionally give Claude its coding tools. If you already have an API key and don't need Claude Code, the Anthropic API is simpler.
 
 ## Terms Compliance
 
