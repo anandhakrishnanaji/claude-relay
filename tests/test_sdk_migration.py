@@ -66,22 +66,26 @@ class TestConstants:
 
         # Check latest fallback models are included
         assert "claude-sonnet-4-6" in CLAUDE_MODELS
-        assert "claude-opus-4-6" in CLAUDE_MODELS
+        assert "claude-opus-5-5" in CLAUDE_MODELS
+        assert "claude-opus-4-5-20251101" in CLAUDE_MODELS
         assert "claude-haiku-4-5-20251001" in CLAUDE_MODELS
+        assert "claude-opus-4-5-20250929" not in CLAUDE_MODELS
 
     def test_default_model_defined(self):
-        """Test that DEFAULT_MODEL is set to recommended model."""
-        from claude_relay.constants import DEFAULT_MODEL, CLAUDE_MODELS
+        """With nothing configured the default is the CLI's latest-Sonnet alias."""
+        from claude_relay.constants import DEFAULT_MODEL_FALLBACK, CLAUDE_MODEL_ALIASES
 
-        assert DEFAULT_MODEL in CLAUDE_MODELS
-        assert DEFAULT_MODEL == "claude-sonnet-4-6"
+        assert DEFAULT_MODEL_FALLBACK == "sonnet"
+        assert DEFAULT_MODEL_FALLBACK in CLAUDE_MODEL_ALIASES
 
-    def test_fast_model_defined(self):
-        """Test that FAST_MODEL is set to fastest model."""
-        from claude_relay.constants import FAST_MODEL, CLAUDE_MODELS
+    def test_parse_model_aliases(self):
+        from claude_relay.constants import parse_model_aliases
 
-        assert FAST_MODEL in CLAUDE_MODELS
-        assert FAST_MODEL == "claude-haiku-4-5-20251001"
+        assert parse_model_aliases(" gpt-4o=sonnet, gpt-4o-mini = haiku,bad,=x") == {
+            "gpt-4o": "sonnet",
+            "gpt-4o-mini": "haiku",
+        }
+        assert parse_model_aliases(None) == {}
 
     def test_claude_tools_defined(self):
         """Test that CLAUDE_TOOLS constant exists."""

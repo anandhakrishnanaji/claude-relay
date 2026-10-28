@@ -5,11 +5,13 @@ Unit tests: what the endpoints hand to claude_cli.run_completion.
 run_completion is mocked and records the keyword arguments it was called with.
 """
 
+import json
 from unittest.mock import patch
 
 from fastapi.testclient import TestClient
 
 import claude_relay.main as main
+from claude_relay import usage as sdk_usage
 
 MODEL = "claude-haiku-4-5-20251001"
 
@@ -97,3 +99,122 @@ class TestPromptPassthrough:
         chunks = make_chunks(text="<thinking>secret</thinking>Answer")
         response, _ = post("/v1/chat/completions", self.chat_payload(), chunks)
         assert response.json()["choices"][0]["message"]["content"] == "Answer"
+
+
+REAL_MODEL = "claude-haiku-5-5"
+
+# What the CLI sends for an unknown --model (captured from CLI 2.1.310)
+UNKNOWN_MODEL_TEXT = (
+    "There's an issue with the selected model (claude-nope). "
+    "It may not exist or you may not have access to it."
+)
+UNKNOWN_MODEL_CHUNKS = [
+    {"subtype": "init", "data": {"model": "claude-nope"}},
+    {
+        "content": [{"type": "text", "text": UNKNOWN_MODEL_TEXT}],
+        "model": "<synthetic>",
+        "error": "model_not_found",
+    },
+    {"subtype": "success", "is_error": True, "result": UNKNOWN_MODEL_TEXT, "api_error_status": 404},
+    {
+        "type": "result",
+        "subtype": "error_during_execution",
+        "is_error": True,
+        "error_message": "Claude Code returned an error result: " + UNKNOWN_MODEL_TEXT,
+    },
+]
+
+
+def chat_payload(model, **extra):
+    return {"model": model, "messages": [{"role": "user", "content": "hi"}], **extra}
+
+
+def anthropic_payload(model):
+    return {"model": model, "messages": [{"role": "user", "content": "hi"}]}
+
+
+def stream_events(response):
+    return [
+        json.loads(line[6:]) for line in response.text.splitlines() if line.startswith("data: {")
+    ]
+
+
+class TestReportedModel:
+    """Responses name the model that actually ran, not the requested alias."""
+
+    def test_chat_non_streaming(self):
+        chunks = make_chunks(model=REAL_MODEL)
+        response, calls = post("/v1/chat/completions", chat_payload("haiku"), chunks)
+        assert calls[0]["model"] == "haiku"
+        assert response.json()["model"] == REAL_MODEL
+
+    def test_chat_streaming(self):
+        chunks = make_chunks(model=REAL_MODEL)
+        response, _ = post("/v1/chat/completions", chat_payload("haiku", stream=True), chunks)
+        events = stream_events(response)
+        assert events and {e["model"] for e in events} == {REAL_MODEL}
+
+    def test_anthropic_messages(self):
+        chunks = make_chunks(model=REAL_MODEL)
+        response, _ = post("/v1/messages", anthropic_payload("haiku"), chunks)
+        assert response.json()["model"] == REAL_MODEL
+
+    def test_falls_back_to_requested_name(self):
+        chunks = [{"subtype": "success", "is_error": False, "result": "ok"}]
+        response, _ = post("/v1/chat/completions", chat_payload("sonnet"), chunks)
+        assert response.json()["model"] == "sonnet"
+
+    def test_extract_model_order(self):
+        assert sdk_usage.extract_model([], "x") == "x"
+        assert sdk_usage.extract_model([{"subtype": "init", "data": {"model": "a"}}], "x") == "a"
+        usage = {"model_usage": {"small": {"outputTokens": 1}, "big": {"outputTokens": 9}}}
+        assert sdk_usage.extract_model([usage], "x") == "big"
+        assistant = {"content": [], "model": "real"}
+        assert sdk_usage.extract_model([assistant, usage], "x") == "real"
+        assert sdk_usage.extract_model([{"content": [], "model": "<synthetic>"}], "x") == "x"
+
+
+class TestUnknownModels:
+    def test_non_claude_name_rejected_up_front(self):
+        for extra in ({}, {"stream": True}):
+            response, calls = post("/v1/chat/completions", chat_payload("gpt-4o", **extra))
+            assert response.status_code == 400
+            assert response.json()["error"]["code"] == "model_not_found"
+            assert response.json()["error"]["type"] == "invalid_request_error"
+            assert calls == []
+
+    def test_non_claude_name_rejected_on_messages(self):
+        response, calls = post("/v1/messages", anthropic_payload("gpt-4o"))
+        assert response.status_code == 400
+        assert response.json()["type"] == "error"
+        assert response.json()["error"]["type"] == "invalid_request_error"
+        assert calls == []
+
+    def test_model_aliases_env(self):
+        with patch("claude_relay.constants.MODEL_ALIASES", {"gpt-4o": "haiku"}):
+            response, calls = post("/v1/chat/completions", chat_payload("gpt-4o"))
+            assert response.status_code == 200
+            assert calls[0]["model"] == "haiku"
+            response, calls = post("/v1/messages", anthropic_payload("gpt-4o"))
+            assert response.status_code == 200
+            assert calls[0]["model"] == "haiku"
+
+    def test_cli_unknown_model_is_400(self):
+        for extra in ({}, {"stream": True}):
+            payload = chat_payload("claude-nope", **extra)
+            response, _ = post("/v1/chat/completions", payload, UNKNOWN_MODEL_CHUNKS)
+            assert response.status_code == 400
+            error = response.json()["error"]
+            assert error["code"] == "model_not_found"
+            assert "issue with the selected model" in error["message"]
+
+    def test_cli_unknown_model_is_400_on_messages(self):
+        response, _ = post("/v1/messages", anthropic_payload("claude-nope"), UNKNOWN_MODEL_CHUNKS)
+        assert response.status_code == 400
+        assert response.json()["error"]["type"] == "invalid_request_error"
+
+
+def test_models_list_includes_aliases():
+    response = TestClient(main.app, base_url="http://localhost").get("/v1/models")
+    ids = {model["id"] for model in response.json()["data"]}
+    assert {"sonnet", "opus", "haiku", "claude-opus-5-5"} <= ids

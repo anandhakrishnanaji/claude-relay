@@ -72,6 +72,27 @@ def extract_stop_reason(chunks: List[Dict[str, Any]]) -> Optional[str]:
     return None
 
 
+def extract_model(chunks: List[Dict[str, Any]], default: str) -> str:
+    """The model that actually ran, or ``default`` if the SDK didn't say.
+
+    Prefers AssistantMessage.model, then the ResultMessage model_usage entry with
+    the most output, then the init SystemMessage (which echoes unknown names).
+    """
+    for chunk in reversed(chunks):
+        model = chunk.get("model")
+        if isinstance(chunk.get("content"), list) and model and model != "<synthetic>":
+            return model
+    for chunk in reversed(chunks):
+        model_usage = chunk.get("model_usage")
+        if isinstance(model_usage, dict) and model_usage:
+            return max(model_usage, key=lambda m: (model_usage[m] or {}).get("outputTokens", 0))
+    for chunk in chunks:
+        data = chunk.get("data")
+        if chunk.get("subtype") == "init" and isinstance(data, dict) and data.get("model"):
+            return data["model"]
+    return default
+
+
 def openai_finish_reason(chunks: List[Dict[str, Any]]) -> str:
     return _OPENAI_FINISH_REASONS.get(extract_stop_reason(chunks), "stop")
 
@@ -105,6 +126,8 @@ def openai_usage_counts(
 def result_error(chunks: List[Dict[str, Any]]) -> Optional[Dict[str, Any]]:
     """Describe an error ResultMessage as {"status": int, "message": str}, else None.
 
+    An unknown model also gets "code": "model_not_found" and status 400.
+
     error_max_turns is not treated as an error here: callers keep returning
     whatever partial assistant text was produced, as before.
     """
@@ -117,5 +140,8 @@ def result_error(chunks: List[Dict[str, Any]]) -> Optional[Dict[str, Any]]:
         or result.get("result")
         or f"Claude Code returned an error ({result.get('subtype')})"
     )
+    # The CLI flags an unknown or inaccessible --model on its synthetic AssistantMessage
+    if any(chunk.get("error") == "model_not_found" for chunk in chunks):
+        return {"status": 400, "message": str(message), "code": "model_not_found"}
     status = 429 if result.get("api_error_status") == 429 else 502
     return {"status": status, "message": str(message)}
