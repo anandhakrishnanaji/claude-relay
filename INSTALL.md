@@ -66,7 +66,7 @@ PORT=9000 ./scripts/install-service.sh     # another port (delete .env first)
 
 ## 3. Docker
 
-Use the production image in `deploy/Dockerfile`. It runs as a non-root user, which the Claude CLI requires when tools are enabled. The `Dockerfile` in the repo root is a development image that runs as root with auto-reload.
+Use the image in `deploy/Dockerfile` (the `Dockerfile` in the repo root is equivalent). It runs as a non-root user, which the Claude CLI requires when tools are enabled.
 
 ```bash
 docker build -f deploy/Dockerfile -t claude-wrapper:local .
@@ -127,11 +127,13 @@ print(reply.choices[0].message.content)
 
 ## Securing it
 
-claude-relay spends your Claude subscription or API credit, and a request with `"enable_tools": true` lets Claude run shell commands on the host.
+claude-relay spends your Claude subscription or API credit, and with tools enabled a request can make Claude run shell commands on the host.
 
 - Keep it bound to `127.0.0.1` unless you need it elsewhere.
 - Before exposing it on a network, set `API_KEY` in `.env`. Clients then send it as `Authorization: Bearer <key>`.
-- Set `CORS_ORIGINS` to the browser origins that need access, or `[]` if none do. The default `["*"]` lets any website you visit call the server from your browser.
+- `CORS_ORIGINS` lists the browser origins that may call the server, as a JSON list such as `["https://app.example.com"]`. The default `[]` allows none, so other websites you visit can't call it from your browser. Avoid `["*"]`: without `API_KEY` it lets any website use the server.
+- `ALLOWED_HOSTS` lists the `Host` names the server answers to (comma-separated, wildcards like `*.example.com` allowed), which blocks DNS-rebinding attacks. The default covers `localhost`, `127.0.0.1`, `::1` and `*.localhost`. If clients reach it by another name, such as a LAN IP or a Docker container name, add it, or requests get `400 Invalid host header`.
+- Tools are off unless you set `ALLOW_TOOLS=true`. Until then, a request with `"enable_tools": true` gets a `403`. Only turn it on if every client that can reach the server is trusted, and set `API_KEY` too.
 
 ## Updating
 
@@ -147,7 +149,9 @@ docker compose up -d --build                      # setups 3/4, in the compose d
 | Symptom | Fix |
 |---|---|
 | `Not logged in` / `401` from Claude | Run `claude auth login` (on the host whose `~/.claude` is mounted), then restart the service or container. |
-| `--dangerously-skip-permissions cannot be used with root` | The container runs as root. Use `deploy/Dockerfile`, which runs as a non-root user. |
+| `--dangerously-skip-permissions cannot be used with root` | The container runs as root. Rebuild from this repo's `Dockerfile` or `deploy/Dockerfile`, which run as a non-root user. |
+| `400 Invalid host header` | The client uses a host name not in `ALLOWED_HOSTS`. Add it, e.g. `ALLOWED_HOSTS=localhost,127.0.0.1,192.168.1.10`. |
+| `403` with `tools_disabled` | The request sent `"enable_tools": true` but the server doesn't set `ALLOW_TOOLS=true`. |
 | `Permission denied` on `~/.claude` in Docker | uid mismatch: rebuild with `--build-arg UID=$(id -u)`. On SELinux, add `:Z` to the mount. |
 | Windows: `Failed to start Claude Code` / `claude not found` | Run uvicorn **without** `--reload`. WSL also works. |
 | `address already in use` | Another process has the port. Pick another with `PORT=...` (and `--port` for uvicorn). |

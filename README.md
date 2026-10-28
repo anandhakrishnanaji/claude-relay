@@ -32,7 +32,7 @@ print(reply.choices[0].message.content)
 
 - **Two APIs, one server.** OpenAI-compatible `/v1/chat/completions` and Anthropic-compatible `/v1/messages`. Chat Completions supports streaming (SSE).
 - **Honours system prompts.** Your system message replaces Claude Code's own prompt on every endpoint, and `/v1/messages` also accepts `system` as a list of text blocks, as the Anthropic SDK sends it.
-- **Tools off by default.** Both endpoints run a single turn without tools, so untrusted text in a prompt can't run commands. Send `"enable_tools": true` to give Claude its Bash/Read/Write tools.
+- **Tools off by default.** Both endpoints run a single turn without tools, so untrusted text in a prompt can't run commands. To give Claude its Bash/Read/Write tools, the server must set `ALLOW_TOOLS=true` and the request must send `"enable_tools": true`.
 - **Isolated from host settings.** Requests don't load the host's `~/.claude/CLAUDE.md`, settings, skills or plugins. Set `CLAUDE_SETTING_SOURCES=user,project,local` to opt back in.
 - **Flexible auth.** Claude CLI login (subscription), `ANTHROPIC_API_KEY`, AWS Bedrock or Google Vertex AI, auto-detected.
 - **Ships deploy tooling.** `scripts/install-service.sh` sets up an always-on systemd user service, and `deploy/` has a Docker + [tsdproxy](https://github.com/almeidapaulopt/tsdproxy) setup for serving it on your tailnet. See [Always-on local service](#always-on-local-service-linux-systemd) and [Home server on your tailnet](#home-server-on-your-tailnet-docker--tsdproxy).
@@ -194,8 +194,14 @@ PORT=8000
 # Timeout in milliseconds
 MAX_TIMEOUT=600000
 
-# CORS origins
-CORS_ORIGINS=["*"]
+# Browser origins allowed to call the API (JSON list; default: none)
+CORS_ORIGINS=[]
+
+# Host header allow-list (default: localhost,127.0.0.1,::1,[::1],*.localhost)
+# ALLOWED_HOSTS=localhost,127.0.0.1
+
+# Honour "enable_tools": true in requests (default: false, such requests get a 403)
+# ALLOW_TOOLS=true
 
 # Working directory for Claude Code (optional)
 # If not set, uses an isolated temporary directory for security
@@ -399,7 +405,8 @@ docker build -t claude-wrapper:latest .
 **Production:**
 ```bash
 docker run -d -p 8000:8000 \
-  -v ~/.claude:/root/.claude \
+  -v ~/.claude:/home/app/.claude \
+  -e CLAUDE_CONFIG_DIR=/home/app/.claude \
   --name claude-wrapper \
   claude-wrapper:latest
 ```
@@ -407,7 +414,8 @@ docker run -d -p 8000:8000 \
 **With custom workspace:**
 ```bash
 docker run -d -p 8000:8000 \
-  -v ~/.claude:/root/.claude \
+  -v ~/.claude:/home/app/.claude \
+  -e CLAUDE_CONFIG_DIR=/home/app/.claude \
   -v /path/to/project:/workspace \
   -e CLAUDE_CWD=/workspace \
   claude-wrapper:latest
@@ -416,11 +424,14 @@ docker run -d -p 8000:8000 \
 **Development (hot reload):**
 ```bash
 docker run -d -p 8000:8000 \
-  -v ~/.claude:/root/.claude \
-  -v $(pwd):/app \
+  -v ~/.claude:/home/app/.claude \
+  -e CLAUDE_CONFIG_DIR=/home/app/.claude \
+  -v $(pwd)/src:/app/src \
   claude-wrapper:latest \
-  poetry run uvicorn src.main:app --host 0.0.0.0 --port 8000 --reload
+  uvicorn src.main:app --host 0.0.0.0 --port 8000 --reload
 ```
+
+The image runs as uid 1000 (the Claude CLI refuses to run tools as root). If your user has a different uid, build with `--build-arg UID=$(id -u) --build-arg GID=$(id -g)`.
 
 ### Docker Compose
 
@@ -432,9 +443,10 @@ services:
     ports:
       - "8000:8000"
     volumes:
-      - ~/.claude:/root/.claude
+      - ~/.claude:/home/app/.claude
     environment:
       - PORT=8000
+      - CLAUDE_CONFIG_DIR=/home/app/.claude
       - MAX_TIMEOUT=600
     restart: unless-stopped
 ```
@@ -449,6 +461,9 @@ Run: `docker-compose up -d` | Stop: `docker-compose down`
 | `MAX_TIMEOUT` | Request timeout (seconds) | `300` |
 | `CLAUDE_CWD` | Working directory | temp dir |
 | `CLAUDE_SETTING_SOURCES` | Comma-separated filesystem settings the CLI loads per request (`user`, `project`, `local`). Empty isolates requests from the host's `~/.claude/CLAUDE.md`, settings, skills and plugins. | empty |
+| `CORS_ORIGINS` | JSON list of browser origins allowed to call the API. `["*"]` allows any origin, without credentials; only use it with `API_KEY` set. | `[]` (none) |
+| `ALLOWED_HOSTS` | Comma-separated `Host` header allow-list; wildcards like `*.example.com` are allowed. Protects against DNS rebinding. Add every name clients use (LAN IP, container name, ...). `*` disables the check. | `localhost,127.0.0.1,::1,[::1],*.localhost` |
+| `ALLOW_TOOLS` | Honour `"enable_tools": true` in requests. Tools run Bash/Write/Edit with permissions bypassed. When off, such requests get a 403. | `false` |
 | `CLAUDE_AUTH_METHOD` | Auth method: `cli`, `api_key`, `bedrock`, `vertex` | auto-detect |
 | `ANTHROPIC_API_KEY` | Direct Anthropic API key. Optional — also unlocks live `/v1/models` discovery and dynamic latest-Sonnet default. Not required when using Bedrock, Vertex, or Claude CLI subscription auth. | - |
 | `API_KEYS` | Comma-separated client API keys | - |
@@ -535,7 +550,7 @@ response = client.chat.completions.create(
     messages=[
         {"role": "user", "content": "What files are in the current directory?"}
     ],
-    extra_body={"enable_tools": True}  # Enable tools for file access
+    extra_body={"enable_tools": True}  # Enable tools (server needs ALLOW_TOOLS=true)
 )
 print(response.choices[0].message.content)
 # Output: Claude will actually read your directory and list the files!
@@ -788,7 +803,7 @@ Yes. Run `claude auth login` on the host, start claude-relay, and point the Open
 On `/v1/chat/completions`, yes: pass `"stream": true` to get server-sent events. `/v1/messages` currently returns non-streaming responses only.
 
 ### Does it support OpenAI function calling?
-No. OpenAI-style `tools`/function calling is not mapped. Claude Code's own tools (Bash, Read, Write and others) can be turned on per request with `"enable_tools": true`.
+No. OpenAI-style `tools`/function calling is not mapped. Claude Code's own tools (Bash, Read, Write and others) can be turned on per request with `"enable_tools": true` once the server sets `ALLOW_TOOLS=true`.
 
 ### Which models can I use?
 Any model Claude Code accepts, such as `claude-sonnet-4-6`, `claude-opus-4-6` and `claude-haiku-4-5-20251001`. With `ANTHROPIC_API_KEY` set, `/v1/models` returns Anthropic's live list. See [Supported Models](#supported-models).

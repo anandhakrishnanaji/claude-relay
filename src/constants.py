@@ -24,8 +24,15 @@ Note:
     - Rate limits can be overridden via environment variables
 """
 
+import json
 import os
-from typing import Optional
+from typing import List, Optional
+
+from dotenv import load_dotenv
+
+# Load .env before reading any env-derived constant below; this module is
+# imported before main.py gets to its own load_dotenv().
+load_dotenv()
 
 # Claude Agent SDK Tool Names
 # These are the built-in tools available in the Claude Agent SDK
@@ -121,6 +128,32 @@ MODEL_LIST_REQUEST_TIMEOUT_SECONDS = float(os.getenv("MODEL_LIST_REQUEST_TIMEOUT
 CLAUDE_SETTING_SOURCES = [
     s.strip() for s in os.getenv("CLAUDE_SETTING_SOURCES", "").split(",") if s.strip()
 ]
+
+
+def parse_cors_origins(value: Optional[str]) -> List[str]:
+    """Parse CORS_ORIGINS (a JSON list). Unset or empty means no origins."""
+    return json.loads(value) if value and value.strip() else []
+
+
+def parse_allowed_hosts(value: Optional[str]) -> List[str]:
+    """Parse ALLOWED_HOSTS (comma-separated). Unset or empty means the local defaults."""
+    hosts = [h.strip() for h in (value or "").split(",") if h.strip()]
+    return hosts or DEFAULT_ALLOWED_HOSTS
+
+
+# Browser origins allowed to call the API cross-origin (JSON list). Empty by
+# default: without an API key, any web page the user visits could otherwise
+# call the local server and read the reply.
+CORS_ORIGINS = parse_cors_origins(os.getenv("CORS_ORIGINS"))
+
+# Host header allow-list (comma-separated, wildcards like *.ts.net). Blocks DNS
+# rebinding, which CORS can't. ALLOWED_HOSTS=* disables the check.
+DEFAULT_ALLOWED_HOSTS = ["localhost", "127.0.0.1", "::1", "[::1]", "*.localhost"]
+ALLOWED_HOSTS = parse_allowed_hosts(os.getenv("ALLOWED_HOSTS"))
+
+# Honour "enable_tools": true in requests. Off by default: tools run Bash, Write
+# and Edit with permissions bypassed, so a request is enough to run code here.
+ALLOW_TOOLS = os.getenv("ALLOW_TOOLS", "false").lower() in ("true", "1", "yes", "on")
 
 # System Prompt Types
 SYSTEM_PROMPT_TYPE_TEXT = "text"
