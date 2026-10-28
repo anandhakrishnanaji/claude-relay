@@ -2,7 +2,7 @@
 name = "claude-relay"
 version = "2.3.0"
 description = "OpenAI- and Anthropic-compatible API server for Claude Code, using your Claude subscription"
-authors = ["Richard Atkinson <richardatk01@gmail.com>", "A Anandha Krishnan <creattech2000@gmail.com>"]
+authors = ["A Anandha Krishnan <creattech2000@gmail.com>"]
 readme = "README.md"
 license = "MIT"
 packages = [{include = "src"}]

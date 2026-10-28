@@ -90,9 +90,8 @@ For users deploying the migrated wrapper:
 
 ### Installation
 ```bash
-git clone https://github.com/RichardAtCT/claude-code-openai-wrapper
-cd claude-code-openai-wrapper
-git checkout claude/research-api-updates-011CUjNxYatBANZZq6bssaxN
+git clone https://github.com/anandhakrishnanaji/claude-relay
+cd claude-relay
 poetry install
 poetry run uvicorn src.main:app --host 0.0.0.0 --port 8000
 ```

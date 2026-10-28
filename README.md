@@ -2,15 +2,13 @@
 
 An OpenAI- and Anthropic-compatible API server for Claude Code. Point any OpenAI or Anthropic client library at it and it runs your requests through Claude Code, using your Claude subscription login or an API key.
 
-> Based on [RichardAtCT/claude-code-openai-wrapper](https://github.com/RichardAtCT/claude-code-openai-wrapper) by Richard Atkinson (MIT). See [LICENSE](./LICENSE).
+**Install:** see [INSTALL.md](./INSTALL.md) for local, always-on, Docker and tailnet setups.
 
-## What's different
+## Highlights
 
-Compared with upstream, claude-relay:
-
-- **Honours system prompts.** Upstream passed the system prompt to the Agent SDK in a shape it ignores, so it was silently dropped and Claude Code's own prompt was used on every endpoint. It now reaches Claude, and `/v1/messages` also accepts `system` as a list of text blocks, as the Anthropic SDK sends it.
-- **Gates tools on `/v1/messages`.** Upstream gave every request Bash/Write/Edit with `bypassPermissions`, so untrusted text in a prompt could run commands. Tools are now off (single turn) unless the request sends `"enable_tools": true`, matching `/v1/chat/completions`.
-- **Isolates host settings.** Requests no longer load the host's `~/.claude/CLAUDE.md`, settings, skills or plugins. Set `CLAUDE_SETTING_SOURCES=user,project,local` to opt back in.
+- **Honours system prompts.** Your system message replaces Claude Code's own prompt on every endpoint, and `/v1/messages` also accepts `system` as a list of text blocks, as the Anthropic SDK sends it.
+- **Tools off by default.** Both endpoints run a single turn without tools, so untrusted text in a prompt can't run commands. Send `"enable_tools": true` to give Claude its Bash/Read/Write tools.
+- **Isolated from host settings.** Requests don't load the host's `~/.claude/CLAUDE.md`, settings, skills or plugins. Set `CLAUDE_SETTING_SOURCES=user,project,local` to opt back in.
 - **Ships deploy tooling.** `scripts/install-service.sh` sets up an always-on systemd user service, and `deploy/` has a Docker + [tsdproxy](https://github.com/almeidapaulopt/tsdproxy) setup for serving it on your tailnet. See [Always-on local service](#always-on-local-service-linux-systemd) and [Home server on your tailnet](#home-server-on-your-tailnet-docker--tsdproxy).
 
 ## About
