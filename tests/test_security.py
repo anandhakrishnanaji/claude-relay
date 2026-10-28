@@ -272,3 +272,29 @@ class TestMCPGate:
             )
         assert response.status_code == 200
         register.assert_called_once()
+
+
+class TestSessionEndpointsAuth:
+    """The /v1/sessions endpoints need the API key when one is configured."""
+
+    @pytest.mark.parametrize(
+        "method,path",
+        [
+            ("get", "/v1/sessions"),
+            ("get", "/v1/sessions/stats"),
+            ("get", "/v1/sessions/abc"),
+            ("delete", "/v1/sessions/abc"),
+        ],
+    )
+    def test_requires_api_key(self, method, path):
+        import claude_relay.auth as auth
+
+        main.session_manager.get_or_create_session("abc")
+        try:
+            with patch.object(auth.auth_manager, "env_api_key", "secret-key"):
+                client = TestClient(main.app, base_url="http://localhost")
+                assert getattr(client, method)(path).status_code == 401
+                ok = getattr(client, method)(path, headers={"Authorization": "Bearer secret-key"})
+                assert ok.status_code == 200
+        finally:
+            main.session_manager.delete_session("abc")
