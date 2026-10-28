@@ -12,23 +12,28 @@ class MessageAdapter:
         Convert OpenAI messages to Claude Code prompt format.
         Returns (prompt, system_prompt)
         """
-        system_prompt = None
+        system_parts = []
         conversation_parts = []
 
         for message in messages:
-            if message.role == "system":
-                # Use the last system message as the system prompt
-                system_prompt = message.content
-            elif message.role == "user":
-                conversation_parts.append(f"Human: {message.content}")
+            content = message.content or ""
+            if message.role in ("system", "developer"):
+                # Join every system/developer message into the system prompt
+                system_parts.append(content)
+            elif message.role in ("user", "tool", "function"):
+                # Tool results come back on the human side of the conversation;
+                # Message has already rendered them as "Tool result (...): ..."
+                conversation_parts.append(f"Human: {content}")
             elif message.role == "assistant":
-                conversation_parts.append(f"Assistant: {message.content}")
+                conversation_parts.append(f"Assistant: {content}")
+
+        system_prompt = "\n\n".join(part for part in system_parts if part) or None
 
         # Join conversation parts
         prompt = "\n\n".join(conversation_parts)
 
-        # If the last message wasn't from the user, add a prompt for assistant
-        if messages and messages[-1].role != "user":
+        # If the last message wasn't from the user (or a tool result), add a prompt for assistant
+        if messages and messages[-1].role not in ("user", "tool", "function"):
             prompt += "\n\nHuman: Please continue."
 
         return prompt, system_prompt
@@ -116,4 +121,4 @@ class MessageAdapter:
         Rough estimation of token count.
         OpenAI's rule of thumb: ~4 characters per token for English text.
         """
-        return len(text) // 4
+        return len(text or "") // 4

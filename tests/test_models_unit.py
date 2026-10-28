@@ -102,6 +102,110 @@ class TestMessage:
         assert msg.content == ""
 
 
+class TestAgenticClientMessages:
+    """Message accepts the shapes agentic clients (OpenClaw, Roo Code, Cline, LiteLLM) send."""
+
+    def test_developer_role_becomes_system(self):
+        msg = Message(role="developer", content="Be terse")
+        assert msg.role == "system"
+        assert msg.content == "Be terse"
+
+    def test_missing_and_null_content_become_empty_string(self):
+        assert Message(role="assistant").content == ""
+        assert Message(role="assistant", content=None).content == ""
+
+    def test_assistant_tool_calls_rendered(self):
+        msg = Message(
+            role="assistant",
+            content=None,
+            tool_calls=[
+                {
+                    "id": "call_1",
+                    "type": "function",
+                    "function": {"name": "read_file", "arguments": '{"path": "a.txt"}'},
+                },
+                {"id": "call_2", "type": "function", "function": {"name": "list_dir"}},
+            ],
+        )
+        assert msg.content == 'Tool call: read_file({"path": "a.txt"})\nTool call: list_dir()'
+
+    def test_assistant_text_kept_before_tool_calls(self):
+        msg = Message(
+            role="assistant",
+            content="Let me check.",
+            tool_calls=[{"function": {"name": "ls", "arguments": "{}"}}],
+        )
+        assert msg.content == "Let me check.\nTool call: ls({})"
+
+    def test_legacy_function_call_rendered(self):
+        msg = Message(
+            role="assistant", content=None, function_call={"name": "ls", "arguments": "{}"}
+        )
+        assert msg.content == "Tool call: ls({})"
+
+    def test_tool_role_rendered_with_id(self):
+        msg = Message(role="tool", tool_call_id="call_1", content="file contents")
+        assert msg.role == "tool"
+        assert msg.content == "Tool result (call_1): file contents"
+
+    def test_tool_role_prefers_name_and_flattens_parts(self):
+        msg = Message(
+            role="tool",
+            tool_call_id="call_1",
+            name="read_file",
+            content=[{"type": "text", "text": "line 1"}, {"type": "text", "text": "line 2"}],
+        )
+        assert msg.content == "Tool result (read_file): line 1\nline 2"
+
+    def test_legacy_function_role(self):
+        msg = Message(role="function", name="ls", content="a.txt")
+        assert msg.content == "Tool result (ls): a.txt"
+
+    def test_binary_parts_dropped(self):
+        msg = Message(
+            role="user",
+            content=[
+                {"type": "text", "text": "What is this?"},
+                {"type": "image_url", "image_url": {"url": "data:image/png;base64,AAAA"}},
+                {"type": "input_audio", "input_audio": {"data": "AAAA", "format": "wav"}},
+                {"type": "file", "file": {"file_id": "file-1"}},
+                {"type": "image", "source": {"type": "base64", "data": "AAAA"}},
+            ],
+        )
+        assert msg.content == "What is this?"
+
+    def test_tool_use_and_tool_result_parts(self):
+        msg = Message(
+            role="user",
+            content=[
+                {"type": "tool_use", "id": "tu_1", "name": "grep", "input": {"q": "TODO"}},
+                {
+                    "type": "tool_result",
+                    "tool_use_id": "tu_1",
+                    "content": [{"type": "text", "text": "3 matches"}],
+                },
+                {"type": "tool_result", "tool_use_id": "tu_2", "content": "boom", "is_error": True},
+            ],
+        )
+        assert msg.content == (
+            'Tool call: grep({"q": "TODO"})\n'
+            "Tool result (tu_1): 3 matches\n"
+            "Tool error (tu_2): boom"
+        )
+
+    def test_extra_fields_ignored(self):
+        msg = Message(role="user", content="hi", cache_control={"type": "ephemeral"}, foo=1)
+        assert msg.content == "hi"
+
+    def test_input_only_fields_not_serialized(self):
+        msg = Message(role="assistant", content="Hello")
+        assert msg.model_dump() == {"role": "assistant", "content": "Hello", "name": None}
+
+    def test_unknown_role_still_rejected(self):
+        with pytest.raises(ValueError):
+            Message(role="robot", content="hi")
+
+
 class TestStreamOptions:
     """Test StreamOptions model."""
 
