@@ -80,6 +80,7 @@ It runs on the official [Claude Agent SDK](https://pypi.org/project/claude-agent
 ### 🔥 **Core API Compatibility**
 - OpenAI-compatible `/v1/chat/completions` endpoint
 - Anthropic-compatible `/v1/messages` endpoint
+- OpenAI Responses API `/v1/responses` (text only, stateless)
 - Support for both streaming and non-streaming responses
 - Compatible with OpenAI Python SDK and all OpenAI client libraries
 - Automatic model validation and selection
@@ -234,7 +235,7 @@ If you listen on another interface (`--host 0.0.0.0`), set an API key. claude-re
 
 Built-in rate limiting protects against abuse and ensures fair usage:
 
-- **Chat Completions** (`/v1/chat/completions`): 10 requests/minute
+- **Chat Completions** (`/v1/chat/completions`, `/v1/messages`, `/v1/responses`): 10 requests/minute
 - **Debug Requests** (`/v1/debug/request`): 2 requests/minute
 - **Auth Status** (`/v1/auth/status`): 10 requests/minute
 - **Health Check** (`/health`): 30 requests/minute
@@ -460,7 +461,21 @@ stream = client.chat.completions.create(
 for chunk in stream:
     if chunk.choices[0].delta.content:
         print(chunk.choices[0].delta.content, end="")
+
+# Responses API (text only)
+response = client.responses.create(
+    model="claude-sonnet-4-6",
+    instructions="Be brief.",
+    input="Explain quantum computing",
+)
+print(response.output_text)
+
+for event in client.responses.create(model="claude-sonnet-4-6", input="Hi", stream=True):
+    if event.type == "response.output_text.delta":
+        print(event.delta, end="")
 ```
+
+`/v1/responses` takes `input` as a string or a list of messages (text parts only; images and files are dropped), `instructions` as the system prompt, and `stream`. It is stateless and text only: requests with `tools`, `tool_choice: "required"`, `previous_response_id` or `conversation` get HTTP 400, so send the whole conversation in `input` each time. `max_output_tokens`, `temperature`, `top_p` and `reasoning` are accepted but not applied.
 
 ## Supported Models
 
@@ -578,6 +593,7 @@ See `examples/session_continuity.py` for comprehensive Python examples and `exam
 - `GET /` - Interactive landing page with API explorer
 - `POST /v1/chat/completions` - OpenAI-compatible chat completions (supports `session_id`)
 - `POST /v1/messages` - Anthropic-compatible messages endpoint
+- `POST /v1/responses` - OpenAI Responses API (text only, stateless, supports streaming)
 - `GET /v1/models` - List available models
 - `GET /v1/auth/status` - Check authentication status and configuration
 - `GET /version` - Get API version
@@ -689,7 +705,7 @@ All tests should show:
 Yes. Run `claude auth login` on the host, start claude-relay, and point the OpenAI SDK's `base_url` at `http://<host>:8000/v1`. Check the [Terms Compliance](#terms-compliance) section first: subscription use is for your own personal use.
 
 ### Does it support streaming?
-On `/v1/chat/completions`, yes: pass `"stream": true` to get server-sent events. `/v1/messages` currently returns non-streaming responses only.
+On `/v1/chat/completions` and `/v1/responses`, yes: pass `"stream": true` to get server-sent events. `/v1/messages` currently returns non-streaming responses only.
 
 ### Does it support OpenAI function calling?
 No. OpenAI-style `tools`/function calling is not mapped. Claude Code's own tools (Bash, Read, Write and others) can be turned on per request with `"enable_tools": true` once the server sets `ALLOW_TOOLS=true`.

@@ -1,6 +1,6 @@
 # Installing claude-relay
 
-claude-relay runs as a small HTTP server that speaks the OpenAI (`/v1/chat/completions`) and Anthropic (`/v1/messages`) APIs and forwards requests to Claude Code. Pick one of the setups below.
+claude-relay runs as a small HTTP server that speaks the OpenAI (`/v1/chat/completions`, `/v1/responses`) and Anthropic (`/v1/messages`) APIs and forwards requests to Claude Code. Pick one of the setups below.
 
 | Setup | Best for | URL |
 |---|---|---|
