@@ -793,9 +793,7 @@ class TestClaudeCodeCLIRunCompletion:
         assert not os.path.exists(sp["path"])
 
     @pytest.mark.asyncio
-    async def test_run_completion_large_system_prompt_file_removed_on_error(
-        self, cli_instance
-    ):
+    async def test_run_completion_large_system_prompt_file_removed_on_error(self, cli_instance):
         """The system prompt temp file is removed even when the SDK fails."""
         from claude_relay.claude_cli import SYSTEM_PROMPT_FILE_THRESHOLD_BYTES
 

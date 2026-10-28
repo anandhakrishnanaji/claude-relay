@@ -114,9 +114,7 @@ class TestChatCompletionsUsage:
         assert final.get("usage") is None
 
     def test_error_result_returns_error_status(self):
-        chunks = make_chunks(
-            text="API Error: 529 overloaded", is_error=True, api_error_status=529
-        )
+        chunks = make_chunks(text="API Error: 529 overloaded", is_error=True, api_error_status=529)
         response = chat(chunks)
         assert response.status_code == 502
         assert "529" in response.text
