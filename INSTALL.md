@@ -102,6 +102,8 @@ docker run -d --name claude-relay --restart unless-stopped \
 - The image runs as uid 1000. If your user has a different uid, build it yourself from a checkout: `docker build -f deploy/Dockerfile --build-arg UID=$(id -u) --build-arg GID=$(id -g) -t claude-relay .`
 - On SELinux hosts (Fedora, RHEL, rootless Podman), mount with `-v ~/.claude:/home/app/.claude:Z`.
 - To use an API key instead of a login, drop the mount and pass `-e ANTHROPIC_API_KEY=...`.
+- For a headless subscription login, use `CLAUDE_CODE_OAUTH_TOKEN` instead of mounting `~/.claude`: run `claude setup-token` on any machine where you can log in, then drop the mount and pass `-e CLAUDE_CODE_OAUTH_TOKEN=...`.
+- To send the CLI's API traffic through a proxy or gateway, pass `-e ANTHROPIC_BASE_URL=https://...`.
 
 ## Verify it works
 
@@ -148,7 +150,7 @@ docker pull ghcr.io/anandhakrishnanaji/claude-relay:latest   # setup 3, then rec
 
 | Symptom | Fix |
 |---|---|
-| `Not logged in` / `401` from Claude | Run `claude auth login` (on the host whose `~/.claude` is mounted), then restart the service or container. |
+| `401` with `claude_cli_not_authenticated` (or `Not logged in`) | The CLI's login is missing or expired. Run `claude auth login` (on the host whose `~/.claude` is mounted), or renew `CLAUDE_CODE_OAUTH_TOKEN`, then restart the service or container. `GET /v1/auth/status` shows the last failure under `last_auth_failure` until a request succeeds. |
 | `--dangerously-skip-permissions cannot be used with root` | The container runs as root. Rebuild from this repo's `Dockerfile` or `deploy/Dockerfile`, which run as a non-root user. |
 | `400 Invalid host header` | The client uses a host name not in `ALLOWED_HOSTS`. Add it, e.g. `ALLOWED_HOSTS=localhost,127.0.0.1,192.168.1.10`. |
 | `403` with `tools_disabled` | The request sent `"enable_tools": true` but the server doesn't set `ALLOW_TOOLS=true`. |

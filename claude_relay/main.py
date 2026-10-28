@@ -50,6 +50,7 @@ from claude_relay.auth import (
     security,
     validate_claude_code_auth,
     get_claude_code_auth_info,
+    record_auth_failure,
 )
 from claude_relay.parameter_validator import ParameterValidator, CompatibilityReporter
 from claude_relay.session_manager import session_manager
@@ -583,6 +584,63 @@ async def validation_exception_handler(request: Request, exc: RequestValidationE
     return JSONResponse(status_code=422, content=error_response)
 
 
+class ClaudeAuthError(HTTPException):
+    """The Claude Code CLI on this host is not logged in, or its login expired."""
+
+    def __init__(self, kind: str):
+        super().__init__(
+            status_code=401,
+            detail=(
+                f"Claude Code on the server is not authenticated ({kind}). The server operator "
+                "must run `claude auth login` on the host (or set CLAUDE_CODE_OAUTH_TOKEN), "
+                "then retry."
+            ),
+        )
+
+
+def _openai_auth_error(exc: ClaudeAuthError) -> Dict[str, Any]:
+    return {
+        "error": {
+            "message": exc.detail,
+            "type": "authentication_error",
+            "code": "claude_cli_not_authenticated",
+        }
+    }
+
+
+@app.exception_handler(ClaudeAuthError)
+async def claude_auth_error_handler(request: Request, exc: ClaudeAuthError):
+    """Return the 401 in the calling endpoint's native error format."""
+    if request.url.path.startswith("/v1/messages"):
+        content = {
+            "type": "error",
+            "error": {"type": "authentication_error", "message": exc.detail},
+        }
+    else:
+        content = _openai_auth_error(exc)
+    return JSONResponse(status_code=401, content=content)
+
+
+def _sdk_error(chunks: List[Dict[str, Any]]) -> Optional[Dict[str, Any]]:
+    """usage.result_error(), also tracking the last Claude Code login failure."""
+    sdk_error = sdk_usage.result_error(chunks)
+    if not sdk_error:
+        record_auth_failure(None)
+    elif sdk_error.get("auth_failure"):
+        logger.warning(f"Claude Code login failure: {sdk_error['message']}")
+        record_auth_failure(sdk_error["auth_failure"])
+    return sdk_error
+
+
+def _raise_for_sdk_error(chunks: List[Dict[str, Any]]) -> None:
+    sdk_error = _sdk_error(chunks)
+    if not sdk_error:
+        return
+    if sdk_error.get("auth_failure"):
+        raise ClaudeAuthError(sdk_error["auth_failure"])
+    raise HTTPException(status_code=sdk_error["status"], detail=sdk_error["message"])
+
+
 async def generate_streaming_response(
     request: ChatCompletionRequest, request_id: str, claude_headers: Optional[Dict[str, Any]] = None
 ) -> AsyncGenerator[str, None]:
@@ -654,6 +712,8 @@ async def generate_streaming_response(
             stream=True,
         ):
             chunks_buffer.append(chunk)
+            if chunk.get("error") == "authentication_failed":
+                continue  # the CLI's login error text; reported as an error chunk below
 
             # Check if we have an assistant message
             # Handle both old format (type/message structure) and new format (direct content)
@@ -734,6 +794,13 @@ async def generate_streaming_response(
 
                         yield f"data: {stream_chunk.model_dump_json()}\n\n"
                         content_sent = True
+
+        sdk_error = _sdk_error(chunks_buffer)
+        if sdk_error and sdk_error.get("auth_failure"):
+            # The 200 status line is already sent, so report it as a final error event
+            error_chunk = _openai_auth_error(ClaudeAuthError(sdk_error["auth_failure"]))
+            yield f"data: {json.dumps(error_chunk)}\n\n"
+            return
 
         # Handle case where no role was sent (send at least role chunk)
         if not role_sent:
@@ -941,9 +1008,7 @@ async def chat_completions(
             ):
                 chunks.append(chunk)
 
-            sdk_error = sdk_usage.result_error(chunks)
-            if sdk_error:
-                raise HTTPException(status_code=sdk_error["status"], detail=sdk_error["message"])
+            _raise_for_sdk_error(chunks)
 
             # Extract assistant message
             raw_assistant_content = claude_cli.parse_claude_message(chunks)
@@ -1070,9 +1135,7 @@ async def anthropic_messages(
         ):
             chunks.append(chunk)
 
-        sdk_error = sdk_usage.result_error(chunks)
-        if sdk_error:
-            raise HTTPException(status_code=sdk_error["status"], detail=sdk_error["message"])
+        _raise_for_sdk_error(chunks)
 
         # Extract assistant message
         raw_assistant_content = claude_cli.parse_claude_message(chunks)
@@ -1850,13 +1913,14 @@ async def debug_request_validation(request: Request):
 @rate_limit_endpoint("auth")
 async def get_auth_status(request: Request):
     """Get Claude Code authentication status."""
-    from claude_relay.auth import auth_manager
+    from claude_relay.auth import auth_manager, last_auth_failure
 
     auth_info = get_claude_code_auth_info()
     active_api_key = auth_manager.get_api_key()
 
     return {
         "claude_code_auth": auth_info,
+        "last_auth_failure": last_auth_failure,
         "server_info": {
             "api_key_required": bool(active_api_key),
             "api_key_source": "environment" if os.getenv("API_KEY") else "none",
