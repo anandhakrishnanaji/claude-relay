@@ -647,6 +647,8 @@ async def generate_streaming_response(
             thinking=ParameterValidator.thinking_from_budget(
                 claude_options.get("max_thinking_tokens")
             ),
+            effort=claude_options.get("effort"),
+            fallback_model=claude_options.get("fallback_model"),
             stream=True,
         ):
             chunks_buffer.append(chunk)
@@ -979,6 +981,8 @@ async def chat_completions(
                 thinking=ParameterValidator.thinking_from_budget(
                     claude_options.get("max_thinking_tokens")
                 ),
+                effort=claude_options.get("effort"),
+                fallback_model=claude_options.get("fallback_model"),
                 stream=False,
             ):
                 chunks.append(chunk)
@@ -1109,6 +1113,12 @@ async def anthropic_messages(
             system_prompt=system_prompt,
             model=model,
             stream=False,
+            thinking=(
+                request_body.thinking.model_dump(exclude_none=True)
+                if request_body.thinking
+                else None
+            ),
+            effort=request_body.output_config.effort if request_body.output_config else None,
             **tool_options,
         ):
             chunks.append(chunk)

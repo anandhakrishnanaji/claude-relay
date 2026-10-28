@@ -654,6 +654,32 @@ class TestClaudeCodeCLIRunCompletion:
         assert captured_options[0].max_thinking_tokens is None
 
     @pytest.mark.asyncio
+    async def test_run_completion_effort_and_fallback(self, cli_instance):
+        """effort and fallback_model reach the SDK; FALLBACK_MODEL is the default."""
+        captured_options = []
+
+        async def mock_query(prompt, options):
+            captured_options.append(options)
+            yield {"type": "assistant"}
+
+        with (
+            patch("claude_relay.claude_cli.query", mock_query),
+            patch("claude_relay.constants.FALLBACK_MODEL", "haiku"),
+        ):
+            async for _ in cli_instance.run_completion("Hi", model="opus", effort="low"):
+                pass
+            # The CLI rejects a fallback equal to the main model
+            async for _ in cli_instance.run_completion("Hi", model="haiku"):
+                pass
+            async for _ in cli_instance.run_completion("Hi", model="opus", fallback_model="sonnet"):
+                pass
+
+        assert captured_options[0].effort == "low"
+        assert captured_options[0].fallback_model == "haiku"
+        assert captured_options[1].fallback_model is None
+        assert captured_options[2].fallback_model == "sonnet"
+
+    @pytest.mark.asyncio
     async def test_run_completion_converts_objects_to_dicts(self, cli_instance):
         """run_completion converts message objects to dicts."""
         # Create a mock object with attributes

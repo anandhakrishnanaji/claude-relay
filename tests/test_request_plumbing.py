@@ -232,6 +232,57 @@ class TestThinking:
         assert calls[0]["thinking"] is None
 
 
+class TestEffortAndFallback:
+    def test_reasoning_effort_mapping(self):
+        for openai_value, sdk_value in (("minimal", "low"), ("medium", "medium"), ("high", "high")):
+            payload = chat_payload(MODEL, reasoning_effort=openai_value)
+            response, calls = post("/v1/chat/completions", payload)
+            assert response.status_code == 200
+            assert calls[0]["effort"] == sdk_value
+
+    def test_invalid_reasoning_effort_rejected(self):
+        response, calls = post("/v1/chat/completions", chat_payload(MODEL, reasoning_effort="huge"))
+        assert response.status_code == 422
+        assert calls == []
+
+    def test_effort_header_overrides_body(self):
+        payload = chat_payload(MODEL, reasoning_effort="low", stream=True)
+        _, calls = post("/v1/chat/completions", payload, headers={"X-Claude-Effort": "MAX"})
+        assert calls[0]["effort"] == "max"
+
+    def test_invalid_effort_header_ignored(self):
+        headers = {"X-Claude-Effort": "turbo"}
+        _, calls = post("/v1/chat/completions", chat_payload(MODEL), headers=headers)
+        assert calls[0]["effort"] is None
+
+    def test_fallback_model_header(self):
+        headers = {"X-Claude-Fallback-Model": "haiku"}
+        _, calls = post("/v1/chat/completions", chat_payload("sonnet"), headers=headers)
+        assert calls[0]["fallback_model"] == "haiku"
+
+    def test_non_claude_fallback_header_ignored(self):
+        headers = {"X-Claude-Fallback-Model": "gpt-4o"}
+        _, calls = post("/v1/chat/completions", chat_payload("sonnet"), headers=headers)
+        assert calls[0]["fallback_model"] is None
+
+    def test_anthropic_thinking_and_effort(self):
+        payload = {
+            **anthropic_payload(MODEL),
+            "thinking": {"type": "enabled", "budget_tokens": 2048},
+            "output_config": {"effort": "high"},
+        }
+        response, calls = post("/v1/messages", payload)
+        assert response.status_code == 200
+        assert calls[0]["thinking"] == {"type": "enabled", "budget_tokens": 2048}
+        assert calls[0]["effort"] == "high"
+
+    def test_anthropic_enabled_thinking_needs_budget(self):
+        payload = {**anthropic_payload(MODEL), "thinking": {"type": "enabled"}}
+        response, calls = post("/v1/messages", payload)
+        assert response.status_code == 422
+        assert calls == []
+
+
 def test_models_list_includes_aliases():
     response = TestClient(main.app, base_url="http://localhost").get("/v1/models")
     ids = {model["id"] for model in response.json()["data"]}

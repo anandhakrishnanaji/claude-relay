@@ -145,6 +145,13 @@ def parse_model_aliases(value: Optional[str]) -> Dict[str, str]:
 # for clients that hard-code OpenAI model names.
 MODEL_ALIASES = parse_model_aliases(os.getenv("MODEL_ALIASES"))
 
+# Model the CLI switches to when the requested one is overloaded or unavailable.
+# Per request: X-Claude-Fallback-Model. Skipped when it equals the request's model.
+FALLBACK_MODEL: Optional[str] = os.getenv("FALLBACK_MODEL", "").strip() or None
+
+# Effort levels ClaudeAgentOptions.effort accepts.
+EFFORT_LEVELS = ("low", "medium", "high", "xhigh", "max")
+
 # Anthropic Models API configuration for dynamically refreshing /v1/models
 ANTHROPIC_MODELS_URL = os.getenv("ANTHROPIC_MODELS_URL", "https://api.anthropic.com/v1/models")
 ANTHROPIC_VERSION = os.getenv("ANTHROPIC_VERSION", "2023-06-01")

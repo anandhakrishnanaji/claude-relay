@@ -126,6 +126,9 @@ class ParameterValidator:
         - X-Claude-Max-Turns: 5
         - X-Claude-Allowed-Tools: tool1,tool2,tool3
         - X-Claude-Permission-Mode: acceptEdits
+        - X-Claude-Max-Thinking-Tokens: 4096 (0 disables thinking)
+        - X-Claude-Effort: low|medium|high|xhigh|max
+        - X-Claude-Fallback-Model: haiku
         """
         claude_options = {}
 
@@ -162,6 +165,18 @@ class ParameterValidator:
                 logger.warning(
                     f"Invalid X-Claude-Max-Thinking-Tokens header: {headers['x-claude-max-thinking-tokens']}"
                 )
+
+        if "x-claude-effort" in headers:
+            effort = headers["x-claude-effort"].strip().lower()
+            if effort in constants.EFFORT_LEVELS:
+                claude_options["effort"] = effort
+            else:
+                logger.warning(f"Invalid X-Claude-Effort header: {headers['x-claude-effort']}")
+
+        if "x-claude-fallback-model" in headers:
+            fallback = cls.resolve_model(headers["x-claude-fallback-model"].strip())
+            if fallback:
+                claude_options["fallback_model"] = fallback
 
         return claude_options
 

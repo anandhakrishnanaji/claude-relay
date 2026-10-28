@@ -356,6 +356,7 @@ The `Dockerfile` in the repo root builds the same non-root image, and the includ
 | `API_KEYS` | Comma-separated client API keys | - |
 | `DEFAULT_MODEL` | Override the default model. When unset and `ANTHROPIC_API_KEY` is configured, the wrapper resolves the latest Sonnet at startup; otherwise it uses the `sonnet` alias, which Claude Code maps to its latest Sonnet. | auto |
 | `MODEL_ALIASES` | Comma-separated `name=model` pairs applied to the request's `model` on both endpoints, for clients that hard-code other names, e.g. `gpt-4o=sonnet,gpt-4o-mini=haiku`. | - |
+| `FALLBACK_MODEL` | Model Claude Code switches to when the requested one is overloaded or unavailable. Ignored when it equals the request's model. Per request: `X-Claude-Fallback-Model` header. | - |
 | `CLAUDE_MODELS_OVERRIDE` | Comma-separated model IDs to advertise via `/v1/models`. Takes precedence over both live and static lists. | - |
 | `MODEL_LIST_CACHE_TTL_SECONDS` | Cache TTL for live `/v1/models` results. | `3600` |
 | `MODEL_LIST_ERROR_TTL_SECONDS` | Short cache TTL applied when the live fetch fails, so transient outages don't suppress live discovery for the full hour. | `60` |
@@ -465,6 +466,8 @@ for chunk in stream:
 The wrapper exposes Claude's full model catalog. When `ANTHROPIC_API_KEY` is set, `/v1/models` returns Anthropic's live list (cached for 1 hour) and the wrapper picks the latest Sonnet as `DEFAULT_MODEL` at startup. When the key is absent — for example, when running with Bedrock, Vertex, or Claude CLI subscription auth — the static list below is served and the `sonnet` alias is the default. Operators who want a curated list regardless of auth can set `CLAUDE_MODELS_OVERRIDE`.
 
 Responses report the model that actually ran (e.g. `claude-haiku-5-5` for a request for `haiku`).
+
+**Effort and thinking:** on `/v1/chat/completions`, OpenAI `reasoning_effort` maps to Claude's effort level (`none`/`minimal` -> `low`, `low`, `medium`, `high`, `xhigh`). The `X-Claude-Effort` header (`low`, `medium`, `high`, `xhigh`, `max`) overrides it, and `X-Claude-Max-Thinking-Tokens` sets a thinking budget (`0` turns thinking off). `/v1/messages` accepts Anthropic's `thinking` and `output_config.effort`. `max_tokens` is ignored: Claude Code has no per-request output cap.
 
 Model names are checked before Claude Code runs. Names that are not Claude models (no `claude` in the name and not an alias, e.g. `gpt-4o`) get a 400 unless `MODEL_ALIASES` maps them. Other `claude-*` names are passed through, so new models work before this list is updated; if Claude Code does not know one, the request fails with a 400 (`model_not_found` on `/v1/chat/completions`, `invalid_request_error` on `/v1/messages`). Bedrock ARNs without `claude` in them need a `MODEL_ALIASES` entry.
 

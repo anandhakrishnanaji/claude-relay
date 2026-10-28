@@ -9,6 +9,7 @@ import logging
 
 from claude_agent_sdk import query, ClaudeAgentOptions
 
+from claude_relay import constants
 from claude_relay.constants import CLAUDE_SETTING_SOURCES
 
 logger = logging.getLogger(__name__)
@@ -116,6 +117,8 @@ class ClaudeCodeCLI:
         disallowed_tools: Optional[List[str]] = None,
         permission_mode: Optional[str] = None,
         thinking: Optional[Dict[str, Any]] = None,
+        effort: Optional[str] = None,
+        fallback_model: Optional[str] = None,
     ) -> AsyncGenerator[Dict[str, Any], None]:
         """Run Claude Agent using the Python SDK and yield response chunks.
 
@@ -168,6 +171,13 @@ class ClaudeCodeCLI:
             # SDK ThinkingConfig; replaces the deprecated max_thinking_tokens
             if thinking:
                 options.thinking = thinking
+            if effort:
+                options.effort = effort
+
+            # The CLI refuses a fallback that equals the main model
+            fallback_model = fallback_model or constants.FALLBACK_MODEL
+            if fallback_model and fallback_model != model:
+                options.fallback_model = fallback_model
 
             # Run the query and yield messages, enforcing the overall timeout.
             # asyncio.timeout() needs Python 3.11, so bound each step with

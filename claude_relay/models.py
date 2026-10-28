@@ -148,6 +148,17 @@ class Message(BaseModel):
         return self
 
 
+# OpenAI reasoning_effort -> ClaudeAgentOptions.effort
+OPENAI_REASONING_EFFORT = {
+    "none": "low",
+    "minimal": "low",
+    "low": "low",
+    "medium": "medium",
+    "high": "high",
+    "xhigh": "xhigh",
+}
+
+
 class StreamOptions(BaseModel):
     """Options for streaming responses."""
 
@@ -181,6 +192,9 @@ class ChatCompletionRequest(BaseModel):
     )
     stream_options: Optional[StreamOptions] = Field(
         default=None, description="Options for streaming responses"
+    )
+    reasoning_effort: Optional[Literal["none", "minimal", "low", "medium", "high", "xhigh"]] = (
+        Field(default=None, description="Mapped to Claude's effort level")
     )
 
     @field_validator("n")
@@ -285,6 +299,10 @@ class ChatCompletionRequest(BaseModel):
             options["model"] = self.model
 
         # Use user field for session identification if provided
+        if self.reasoning_effort:
+            # Claude has no "off" or "minimal" effort; low is the closest
+            options["effort"] = OPENAI_REASONING_EFFORT[self.reasoning_effort]
+
         if self.user:
             # Could be used for analytics/logging or session tracking
             logger.info(f"Request from user: {self.user}")
@@ -536,6 +554,28 @@ class AnthropicMessage(BaseModel):
     content: Union[str, List[Union[AnthropicTextBlock, AnthropicContentBlock]]]
 
 
+class AnthropicThinking(BaseModel):
+    """Anthropic `thinking`; the same shape as the SDK's ThinkingConfig."""
+
+    type: Literal["enabled", "adaptive", "disabled"]
+    budget_tokens: Optional[int] = Field(default=None, ge=1)
+    display: Optional[Literal["summarized", "omitted"]] = None
+
+    @model_validator(mode="after")
+    def require_budget(self):
+        if self.type == "enabled" and self.budget_tokens is None:
+            raise ValueError('thinking.budget_tokens is required when type is "enabled"')
+        return self
+
+
+class AnthropicOutputConfig(BaseModel):
+    """Anthropic `output_config`; only `effort` is used."""
+
+    model_config = ConfigDict(extra="allow")
+
+    effort: Optional[Literal["low", "medium", "high", "xhigh", "max"]] = None
+
+
 class AnthropicMessagesRequest(BaseModel):
     """Anthropic Messages API request format."""
 
@@ -551,6 +591,8 @@ class AnthropicMessagesRequest(BaseModel):
     stop_sequences: Optional[List[str]] = None
     stream: Optional[bool] = False
     metadata: Optional[Dict[str, Any]] = None
+    thinking: Optional[AnthropicThinking] = None
+    output_config: Optional[AnthropicOutputConfig] = None
     enable_tools: Optional[bool] = Field(
         default=False,
         description="Enable Claude Code tools (Read, Write, Bash, etc.) - disabled by default",
