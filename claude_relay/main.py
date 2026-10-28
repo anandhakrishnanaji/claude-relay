@@ -52,6 +52,7 @@ from claude_relay.auth import (
     get_claude_code_auth_info,
 )
 from claude_relay.parameter_validator import ParameterValidator, CompatibilityReporter
+from claude_relay.responses_api import router as responses_router
 from claude_relay.session_manager import session_manager
 from claude_relay.tool_manager import tool_manager
 from claude_relay.mcp_client import mcp_client, MCPServerConfig
@@ -358,6 +359,7 @@ app = FastAPI(
     version="1.0.0",
     lifespan=lifespan,
 )
+app.include_router(responses_router)
 
 
 class HostAllowListMiddleware(TrustedHostMiddleware):
