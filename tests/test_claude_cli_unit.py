@@ -637,6 +637,23 @@ class TestClaudeCodeCLIRunCompletion:
             assert captured_options[0].permission_mode == "acceptEdits"
 
     @pytest.mark.asyncio
+    async def test_run_completion_with_thinking(self, cli_instance):
+        """run_completion passes the thinking config to the SDK."""
+        captured_options = []
+
+        async def mock_query(prompt, options):
+            captured_options.append(options)
+            yield {"type": "assistant"}
+
+        thinking = {"type": "enabled", "budget_tokens": 2048}
+        with patch("claude_relay.claude_cli.query", mock_query):
+            async for _ in cli_instance.run_completion("Hello", thinking=thinking):
+                pass
+
+        assert captured_options[0].thinking == thinking
+        assert captured_options[0].max_thinking_tokens is None
+
+    @pytest.mark.asyncio
     async def test_run_completion_converts_objects_to_dicts(self, cli_instance):
         """run_completion converts message objects to dicts."""
         # Create a mock object with attributes

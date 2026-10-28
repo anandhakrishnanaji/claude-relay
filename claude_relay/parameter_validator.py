@@ -44,6 +44,15 @@ class ParameterValidator:
             return constants.MODEL_ALIASES[model]
         return model if cls.validate_model(model) else None
 
+    @staticmethod
+    def thinking_from_budget(budget: Optional[int]) -> Optional[Dict[str, Any]]:
+        """X-Claude-Max-Thinking-Tokens as an SDK thinking config; 0 turns thinking off."""
+        if budget is None:
+            return None
+        if budget <= 0:
+            return {"type": "disabled"}
+        return {"type": "enabled", "budget_tokens": budget}
+
     @classmethod
     def validate_permission_mode(cls, permission_mode: str) -> bool:
         """Validate permission mode parameter."""

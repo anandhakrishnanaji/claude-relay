@@ -644,6 +644,9 @@ async def generate_streaming_response(
             allowed_tools=claude_options.get("allowed_tools"),
             disallowed_tools=claude_options.get("disallowed_tools"),
             permission_mode=claude_options.get("permission_mode"),
+            thinking=ParameterValidator.thinking_from_budget(
+                claude_options.get("max_thinking_tokens")
+            ),
             stream=True,
         ):
             chunks_buffer.append(chunk)
@@ -973,6 +976,9 @@ async def chat_completions(
                 allowed_tools=claude_options.get("allowed_tools"),
                 disallowed_tools=claude_options.get("disallowed_tools"),
                 permission_mode=claude_options.get("permission_mode"),
+                thinking=ParameterValidator.thinking_from_budget(
+                    claude_options.get("max_thinking_tokens")
+                ),
                 stream=False,
             ):
                 chunks.append(chunk)

@@ -115,6 +115,7 @@ class ClaudeCodeCLI:
         allowed_tools: Optional[List[str]] = None,
         disallowed_tools: Optional[List[str]] = None,
         permission_mode: Optional[str] = None,
+        thinking: Optional[Dict[str, Any]] = None,
     ) -> AsyncGenerator[Dict[str, Any], None]:
         """Run Claude Agent using the Python SDK and yield response chunks.
 
@@ -163,6 +164,10 @@ class ClaudeCodeCLI:
             # Set permission mode (needed for tool execution in API context)
             if permission_mode:
                 options.permission_mode = permission_mode
+
+            # SDK ThinkingConfig; replaces the deprecated max_thinking_tokens
+            if thinking:
+                options.thinking = thinking
 
             # Run the query and yield messages, enforcing the overall timeout.
             # asyncio.timeout() needs Python 3.11, so bound each step with

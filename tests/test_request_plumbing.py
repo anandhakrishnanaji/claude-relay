@@ -214,6 +214,24 @@ class TestUnknownModels:
         assert response.json()["error"]["type"] == "invalid_request_error"
 
 
+class TestThinking:
+    def test_header_budget_reaches_sdk(self):
+        headers = {"X-Claude-Max-Thinking-Tokens": "4096"}
+        response, calls = post("/v1/chat/completions", chat_payload(MODEL), headers=headers)
+        assert response.status_code == 200
+        assert calls[0]["thinking"] == {"type": "enabled", "budget_tokens": 4096}
+
+    def test_header_zero_disables_thinking(self):
+        headers = {"X-Claude-Max-Thinking-Tokens": "0"}
+        payload = chat_payload(MODEL, stream=True)
+        _, calls = post("/v1/chat/completions", payload, headers=headers)
+        assert calls[0]["thinking"] == {"type": "disabled"}
+
+    def test_max_tokens_is_not_a_thinking_budget(self):
+        _, calls = post("/v1/chat/completions", chat_payload(MODEL, max_tokens=50))
+        assert calls[0]["thinking"] is None
+
+
 def test_models_list_includes_aliases():
     response = TestClient(main.app, base_url="http://localhost").get("/v1/models")
     ids = {model["id"] for model in response.json()["data"]}
