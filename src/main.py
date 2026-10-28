@@ -402,7 +402,7 @@ async def lifespan(app: FastAPI):
 # Create FastAPI app
 app = FastAPI(
     title="claude-relay",
-    description="OpenAI-compatible API for Claude Code",
+    description="Claude Code API server with OpenAI- and Anthropic-compatible endpoints",
     version="1.0.0",
     lifespan=lifespan,
 )
@@ -1145,7 +1145,7 @@ async def root():
         <meta charset="UTF-8">
         <meta name="viewport" content="width=device-width, initial-scale=1.0">
         <meta name="color-scheme" content="light dark">
-        <title>claude-relay</title>
+        <title>claude-relay: Claude Code API server</title>
         <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@picocss/pico@2/css/pico.min.css">
         <style>
             :root {{

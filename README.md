@@ -1,10 +1,10 @@
 <!--
-  claude-relay: a self-hosted OpenAI-compatible and Anthropic-compatible API server for Claude Code.
+  claude-relay: Claude Code API server. A self-hosted OpenAI-compatible and Anthropic-compatible API server for Claude Code.
   Use your Claude subscription (Pro/Max) or an Anthropic API key from any OpenAI SDK or Anthropic SDK client.
   Python, FastAPI, Claude Agent SDK. MIT licensed.
 -->
 
-# claude-relay: OpenAI-compatible API for Claude Code
+# claude-relay: Claude Code API server
 
 <p>
   <a href="https://github.com/anandhakrishnanaji/claude-relay/actions/workflows/ci.yml"><img src="https://github.com/anandhakrishnanaji/claude-relay/actions/workflows/ci.yml/badge.svg" alt="CI" /></a>
@@ -13,7 +13,7 @@
   <img src="https://img.shields.io/badge/API-OpenAI%20%2B%20Anthropic%20compatible-8A2BE2" alt="OpenAI and Anthropic compatible API" />
 </p>
 
-**claude-relay is a self-hosted API server that exposes Claude Code through the OpenAI Chat Completions API (`/v1/chat/completions`) and the Anthropic Messages API (`/v1/messages`).** Point any OpenAI or Anthropic client library at it by changing the base URL, and your requests run through Claude Code using your Claude subscription login or an Anthropic API key.
+**claude-relay is a self-hosted Claude Code API server. It exposes Claude Code through the OpenAI Chat Completions API (`/v1/chat/completions`) and the Anthropic Messages API (`/v1/messages`).** Point any OpenAI or Anthropic client library at it by changing the base URL, and your requests run through Claude Code using your Claude subscription login or an Anthropic API key.
 
 ```python
 from openai import OpenAI
