@@ -35,9 +35,9 @@ jobs:
             echo "exists=false" >> "$GITHUB_OUTPUT"
           fi
 
+      # setup-uv with python-version already creates and activates .venv
       - name: Run tests
         run: |
-          uv venv
           uv pip install -e . pytest pytest-asyncio hypothesis requests openai
           .venv/bin/python -m pytest tests -q
 
