@@ -459,6 +459,14 @@ app.add_middleware(RequestIDMiddleware)
 app.add_middleware(RequestSizeLimitMiddleware)
 
 
+SECRET_HEADERS = {"authorization", "x-api-key", "cookie", "proxy-authorization"}
+
+
+def redact_headers(headers) -> Dict[str, str]:
+    """Copy request headers with credential values masked, for logs and debug output."""
+    return {k: "[REDACTED]" if k.lower() in SECRET_HEADERS else v for k, v in headers.items()}
+
+
 class DebugLoggingMiddleware(BaseHTTPMiddleware):
     """ASGI-compliant middleware for logging request/response details when debug mode is enabled."""
 
@@ -474,7 +482,7 @@ class DebugLoggingMiddleware(BaseHTTPMiddleware):
 
         # Log basic request info with request ID for correlation
         logger.debug(f"🔍 [{request_id}] Incoming request: {request.method} {request.url}")
-        logger.debug(f"🔍 [{request_id}] Headers: {dict(request.headers)}")
+        logger.debug(f"🔍 [{request_id}] Headers: {redact_headers(request.headers)}")
 
         # For POST requests, try to log body (but don't break if we can't)
         body_logged = False
@@ -533,7 +541,10 @@ async def validation_exception_handler(request: Request, exc: RequestValidationE
 
     # Log the validation error details
     logger.error(f"❌ Request validation failed for {request.method} {request.url}")
-    logger.error(f"❌ Validation errors: {exc.errors()}")
+    # Leave out "input": it can hold a whole prompt, and this logs outside debug mode too
+    logger.error(
+        f"❌ Validation errors: {[{k: v for k, v in e.items() if k != 'input'} for e in exc.errors()]}"
+    )
 
     # Create detailed error response
     error_details = []
@@ -1780,8 +1791,11 @@ async def root():
 
 @app.post("/v1/debug/request")
 @rate_limit_endpoint("debug")
-async def debug_request_validation(request: Request):
+async def debug_request_validation(
+    request: Request, credentials: Optional[HTTPAuthorizationCredentials] = Depends(security)
+):
     """Debug endpoint to test request validation and see what's being sent."""
+    await verify_api_key(request, credentials)
     try:
         # Get the raw request body
         body = await request.body()
@@ -1819,7 +1833,7 @@ async def debug_request_validation(request: Request):
 
         return {
             "debug_info": {
-                "headers": dict(request.headers),
+                "headers": redact_headers(request.headers),
                 "method": request.method,
                 "url": str(request.url),
                 "raw_body": raw_body,
@@ -1839,7 +1853,7 @@ async def debug_request_validation(request: Request):
         return {
             "debug_info": {
                 "error": f"Debug endpoint error: {str(e)}",
-                "headers": dict(request.headers),
+                "headers": redact_headers(request.headers),
                 "method": request.method,
                 "url": str(request.url),
             }
@@ -1848,8 +1862,11 @@ async def debug_request_validation(request: Request):
 
 @app.get("/v1/auth/status")
 @rate_limit_endpoint("auth")
-async def get_auth_status(request: Request):
+async def get_auth_status(
+    request: Request, credentials: Optional[HTTPAuthorizationCredentials] = Depends(security)
+):
     """Get Claude Code authentication status."""
+    await verify_api_key(request, credentials)
     from claude_relay.auth import auth_manager
 
     auth_info = get_claude_code_auth_info()
@@ -1867,9 +1884,11 @@ async def get_auth_status(request: Request):
 
 @app.get("/v1/sessions/stats")
 async def get_session_stats(
+    request: Request,
     credentials: Optional[HTTPAuthorizationCredentials] = Depends(security),
 ):
     """Get session manager statistics."""
+    await verify_api_key(request, credentials)
     stats = session_manager.get_stats()
     return {
         "session_stats": stats,
@@ -1879,17 +1898,23 @@ async def get_session_stats(
 
 
 @app.get("/v1/sessions")
-async def list_sessions(credentials: Optional[HTTPAuthorizationCredentials] = Depends(security)):
+async def list_sessions(
+    request: Request, credentials: Optional[HTTPAuthorizationCredentials] = Depends(security)
+):
     """List all active sessions."""
+    await verify_api_key(request, credentials)
     sessions = session_manager.list_sessions()
     return SessionListResponse(sessions=sessions, total=len(sessions))
 
 
 @app.get("/v1/sessions/{session_id}")
 async def get_session(
-    session_id: str, credentials: Optional[HTTPAuthorizationCredentials] = Depends(security)
+    session_id: str,
+    request: Request,
+    credentials: Optional[HTTPAuthorizationCredentials] = Depends(security),
 ):
     """Get information about a specific session."""
+    await verify_api_key(request, credentials)
     session = session_manager.get_session(session_id)
     if not session:
         raise HTTPException(status_code=404, detail="Session not found")
@@ -1899,9 +1924,12 @@ async def get_session(
 
 @app.delete("/v1/sessions/{session_id}")
 async def delete_session(
-    session_id: str, credentials: Optional[HTTPAuthorizationCredentials] = Depends(security)
+    session_id: str,
+    request: Request,
+    credentials: Optional[HTTPAuthorizationCredentials] = Depends(security),
 ):
     """Delete a specific session."""
+    await verify_api_key(request, credentials)
     deleted = session_manager.delete_session(session_id)
     if not deleted:
         raise HTTPException(status_code=404, detail="Session not found")
@@ -2019,6 +2047,16 @@ async def get_tool_stats(
 # MCP (Model Context Protocol) Management Endpoints
 
 
+def require_mcp_allowed():
+    """Registering/connecting an MCP server spawns a client-chosen command, so gate it like tools."""
+    if not constants.ALLOW_TOOLS:
+        raise HTTPException(
+            status_code=403,
+            detail="MCP server registration is disabled on this server. Set ALLOW_TOOLS=true "
+            "on the server to let clients register and launch MCP server commands.",
+        )
+
+
 @app.get("/v1/mcp/servers", response_model=MCPServersListResponse)
 @rate_limit_endpoint("general")
 async def list_mcp_servers(
@@ -2064,6 +2102,7 @@ async def register_mcp_server(
 ):
     """Register a new MCP server."""
     await verify_api_key(request, credentials)
+    require_mcp_allowed()
 
     if not mcp_client.is_available():
         raise HTTPException(
@@ -2093,6 +2132,7 @@ async def connect_mcp_server(
 ):
     """Connect to a registered MCP server."""
     await verify_api_key(request, credentials)
+    require_mcp_allowed()
 
     if not mcp_client.is_available():
         raise HTTPException(

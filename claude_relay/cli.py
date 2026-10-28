@@ -119,7 +119,12 @@ def main(argv: Optional[List[str]] = None) -> None:
 
     import uvicorn
 
-    uvicorn.run("claude_relay.main:app", host=host, port=port)
+    # uvicorn trusts X-Forwarded-For from 127.0.0.1 by default, so any local client could
+    # pick its own rate-limit key. Trust no proxy unless FORWARDED_ALLOW_IPS names one.
+    forwarded_allow_ips = os.getenv("FORWARDED_ALLOW_IPS", "")
+    uvicorn.run(
+        "claude_relay.main:app", host=host, port=port, forwarded_allow_ips=forwarded_allow_ips
+    )
 
 
 if __name__ == "__main__":

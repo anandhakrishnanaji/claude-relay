@@ -239,7 +239,7 @@ Built-in rate limiting protects against abuse and ensures fair usage:
 - **Auth Status** (`/v1/auth/status`): 10 requests/minute
 - **Health Check** (`/health`): 30 requests/minute
 
-Rate limits are applied per IP address using a fixed window algorithm. When exceeded, the API returns HTTP 429 with a structured error response:
+Rate limits are applied per IP address using a fixed window algorithm. The IP is the TCP peer: `X-Forwarded-For` is ignored unless the proxy's address is in `FORWARDED_ALLOW_IPS` (for example `FORWARDED_ALLOW_IPS=127.0.0.1` behind a local nginx). Behind such a proxy without it, all clients share one limit. When exceeded, the API returns HTTP 429 with a structured error response:
 
 ```json
 {
@@ -350,7 +350,9 @@ The `Dockerfile` in the repo root builds the same non-root image, and the includ
 | `CLAUDE_SETTING_SOURCES` | Comma-separated filesystem settings the CLI loads per request (`user`, `project`, `local`). Empty isolates requests from the host's `~/.claude/CLAUDE.md`, settings, skills and plugins. | empty |
 | `CORS_ORIGINS` | JSON list of browser origins allowed to call the API. `["*"]` allows any origin, without credentials; only use it with `API_KEY` set. | `[]` (none) |
 | `ALLOWED_HOSTS` | Comma-separated `Host` header allow-list; wildcards like `*.example.com` are allowed. Protects against DNS rebinding. Add every name clients use (LAN IP, container name, ...). `*` disables the check. | `localhost,127.0.0.1,::1,[::1],*.localhost` |
-| `ALLOW_TOOLS` | Honour `"enable_tools": true` in requests. Tools run Bash/Write/Edit with permissions bypassed. When off, such requests get a 403. | `false` |
+| `FORWARDED_ALLOW_IPS` | Comma-separated proxy IPs whose `X-Forwarded-For` is trusted for the client IP (rate limits, logs). Read by `claude-relay`; plain `uvicorn` trusts `127.0.0.1` by default. | empty (none) |
+| `MAX_SESSIONS` | Most sessions kept in memory at once. Creating one more evicts the least recently used. | `1000` |
+| `ALLOW_TOOLS` | Honour `"enable_tools": true` in requests, and allow `POST /v1/mcp/servers` and `/v1/mcp/connect` (which launch a client-chosen command). Tools run Bash/Write/Edit with permissions bypassed. When off, such requests get a 403. | `false` |
 | `CLAUDE_AUTH_METHOD` | Auth method: `cli`, `api_key`, `bedrock`, `vertex` | auto-detect |
 | `ANTHROPIC_API_KEY` | Direct Anthropic API key. Optional — also unlocks live `/v1/models` discovery and dynamic latest-Sonnet default. Not required when using Bedrock, Vertex, or Claude CLI subscription auth. | - |
 | `API_KEYS` | Comma-separated client API keys | - |

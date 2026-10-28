@@ -14,7 +14,7 @@ from claude_relay import cli
 @pytest.fixture
 def clean_env(tmp_path, monkeypatch):
     """Run from an empty directory with no relay settings in the environment."""
-    for key in ("API_KEY", "PORT", "CLAUDE_WRAPPER_HOST", "DEBUG_MODE"):
+    for key in ("API_KEY", "PORT", "CLAUDE_WRAPPER_HOST", "DEBUG_MODE", "FORWARDED_ALLOW_IPS"):
         monkeypatch.delenv(key, raising=False)
     monkeypatch.chdir(tmp_path)
     return tmp_path
@@ -52,14 +52,25 @@ class TestMain:
         port = _free_port()
         with patch.dict(os.environ, {"PORT": str(port)}), patch("uvicorn.run") as run:
             cli.main([])
-        run.assert_called_once_with("claude_relay.main:app", host="127.0.0.1", port=port)
+        run.assert_called_once_with(
+            "claude_relay.main:app", host="127.0.0.1", port=port, forwarded_allow_ips=""
+        )
 
     def test_flags_override_env(self, clean_env):
         port = _free_port()
         with patch.dict(os.environ, {"PORT": "1", "CLAUDE_WRAPPER_HOST": "0.0.0.0"}):
             with patch("uvicorn.run") as run:
                 cli.main(["--host", "127.0.0.1", "--port", str(port)])
-        run.assert_called_once_with("claude_relay.main:app", host="127.0.0.1", port=port)
+        run.assert_called_once_with(
+            "claude_relay.main:app", host="127.0.0.1", port=port, forwarded_allow_ips=""
+        )
+
+    def test_forwarded_allow_ips_from_env(self, clean_env):
+        port = _free_port()
+        with patch.dict(os.environ, {"PORT": str(port), "FORWARDED_ALLOW_IPS": "10.0.0.1"}):
+            with patch("uvicorn.run") as run:
+                cli.main([])
+        assert run.call_args.kwargs["forwarded_allow_ips"] == "10.0.0.1"
 
     def test_api_key_flag_sets_env(self, clean_env):
         with patch.dict(os.environ, {}), patch("uvicorn.run"):

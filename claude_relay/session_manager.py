@@ -1,5 +1,6 @@
 import asyncio
 import logging
+import os
 from datetime import datetime, timedelta
 from typing import Dict, List, Optional, Tuple
 from dataclasses import dataclass, field
@@ -52,8 +53,15 @@ class Session:
 class SessionManager:
     """Manages conversation sessions with automatic cleanup."""
 
-    def __init__(self, default_ttl_hours: int = 1, cleanup_interval_minutes: int = 5):
+    def __init__(
+        self,
+        default_ttl_hours: int = 1,
+        cleanup_interval_minutes: int = 5,
+        max_sessions: Optional[int] = None,
+    ):
         self.sessions: Dict[str, Session] = {}
+        # Clients name sessions, so cap how many live at once
+        self.max_sessions = max_sessions or int(os.getenv("MAX_SESSIONS", "1000"))
         self.lock = Lock()
         self.default_ttl_hours = default_ttl_hours
         self.cleanup_interval_minutes = cleanup_interval_minutes
@@ -107,6 +115,12 @@ class SessionManager:
                 else:
                     session.touch()
             else:
+                if len(self.sessions) >= self.max_sessions:
+                    oldest = min(self.sessions.values(), key=lambda s: s.last_accessed)
+                    del self.sessions[oldest.session_id]
+                    logger.warning(
+                        f"Session limit ({self.max_sessions}) reached, evicted {oldest.session_id}"
+                    )
                 session = Session(session_id=session_id)
                 self.sessions[session_id] = session
                 logger.info(f"Created new session: {session_id}")
