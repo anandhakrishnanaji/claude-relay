@@ -50,7 +50,7 @@ def post(path, payload, chunks):
         patch.object(main, "validate_claude_code_auth", return_value=(True, {})),
         patch.object(main.claude_cli, "run_completion", fake_run_completion),
     ):
-        return TestClient(main.app).post(path, json=payload)
+        return TestClient(main.app, base_url="http://localhost").post(path, json=payload)
 
 
 def chat(chunks, **extra):

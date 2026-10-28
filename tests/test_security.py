@@ -148,7 +148,7 @@ class TestToolGate:
         "enable_tools": True,
     }
 
-    def _post(self, path, payload, allow_tools):
+    def _post(self, path, payload, allow_tools, headers=None):
         captured = {}
 
         async def fake_run_completion(**kwargs):
@@ -162,7 +162,7 @@ class TestToolGate:
             patch.object(main.constants, "ALLOW_TOOLS", allow_tools),
         ):
             client = TestClient(main.app, base_url="http://localhost")
-            response = client.post(path, json=payload)
+            response = client.post(path, json=payload, headers=headers)
         return response, captured
 
     def test_default_is_off(self):
@@ -205,6 +205,21 @@ class TestToolGate:
         response, opts = self._post("/v1/chat/completions", payload, allow_tools=False)
         assert response.status_code == 200
         assert opts["disallowed_tools"] == CLAUDE_TOOLS
+
+    @pytest.mark.parametrize("stream", [False, True])
+    def test_headers_cannot_reenable_tools(self, stream):
+        payload = {k: v for k, v in self.CHAT.items() if k != "enable_tools"}
+        headers = {
+            "X-Claude-Allowed-Tools": "Bash,Write",
+            "X-Claude-Permission-Mode": "bypassPermissions",
+        }
+        response, opts = self._post(
+            "/v1/chat/completions", {**payload, "stream": stream}, False, headers
+        )
+        assert response.status_code == 200
+        assert opts["disallowed_tools"] == CLAUDE_TOOLS
+        assert opts.get("allowed_tools") is None
+        assert opts.get("permission_mode") is None
 
     def test_chat_completions_allowed(self):
         response, opts = self._post("/v1/chat/completions", self.CHAT, allow_tools=True)

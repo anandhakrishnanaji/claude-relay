@@ -139,7 +139,7 @@ def test_agentic_client_payload_accepted():
         patch.object(main.claude_cli, "run_completion", fake_run_completion),
         patch.object(main.claude_cli, "parse_claude_message", return_value="It is sunny."),
     ):
-        response = TestClient(main.app).post("/v1/chat/completions", json=payload)
+        response = TestClient(main.app, base_url="http://localhost").post("/v1/chat/completions", json=payload)
 
     assert response.status_code == 200, response.text
     message = response.json()["choices"][0]["message"]

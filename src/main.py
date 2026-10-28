@@ -681,6 +681,10 @@ async def generate_streaming_response(
             # Disable all tools by using CLAUDE_TOOLS constant
             claude_options["disallowed_tools"] = CLAUDE_TOOLS
             claude_options["max_turns"] = 1  # Single turn for Q&A
+            # Drop X-Claude-Allowed-Tools / X-Claude-Permission-Mode so headers
+            # can't re-enable tools that enable_tools/ALLOW_TOOLS left off
+            claude_options.pop("allowed_tools", None)
+            claude_options.pop("permission_mode", None)
             logger.info("Tools disabled (default behavior for OpenAI compatibility)")
         else:
             # Enable tools - use default safe subset (Read, Glob, Grep, Bash, Write, Edit)
@@ -966,6 +970,10 @@ async def chat_completions(
                 # Disable all tools by using CLAUDE_TOOLS constant
                 claude_options["disallowed_tools"] = CLAUDE_TOOLS
                 claude_options["max_turns"] = 1  # Single turn for Q&A
+                # Drop X-Claude-Allowed-Tools / X-Claude-Permission-Mode so headers
+                # can't re-enable tools that enable_tools/ALLOW_TOOLS left off
+                claude_options.pop("allowed_tools", None)
+                claude_options.pop("permission_mode", None)
                 logger.info("Tools disabled (default behavior for OpenAI compatibility)")
             else:
                 # Enable tools - use default safe subset (Read, Glob, Grep, Bash, Write, Edit)
