@@ -20,13 +20,13 @@ Usage Examples:
 
 Note:
     - Tool configurations are managed by ToolManager (see tool_manager.py)
-    - Model validation uses graceful degradation (warns but allows unknown models)
+    - Model validation rejects only names that are clearly not Claude models
     - Rate limits can be overridden via environment variables
 """
 
 import json
 import os
-from typing import List, Optional
+from typing import Dict, List, Optional
 
 from dotenv import load_dotenv
 
@@ -80,16 +80,39 @@ DEFAULT_DISALLOWED_TOOLS = [
 #
 # Operators can override the advertised model list without rebuilding the image:
 #   CLAUDE_MODELS_OVERRIDE=claude-sonnet-4-6,claude-opus-4-6
+# First-party IDs from the model table in the bundled Claude Code CLI (2.1.310).
 DEFAULT_CLAUDE_MODELS = [
-    # Claude 4.6 Family (Latest) - RECOMMENDED
-    "claude-opus-4-6",  # Most capable
-    "claude-sonnet-4-6",  # Recommended - best coding model
-    # Claude 4.5 Family (Fall 2025)
-    "claude-opus-4-5-20250929",  # Opus 4.5 - deep reasoning and coding
-    "claude-sonnet-4-5-20250929",  # Sonnet 4.5 - agents and coding
-    "claude-haiku-4-5-20251001",  # Fast and cheap
-    # Claude 4.1
-    "claude-opus-4-1-20250805",  # Upgraded Opus 4
+    # Claude 5.x
+    "claude-opus-5-5",
+    "claude-opus-5",
+    "claude-sonnet-5-5",
+    "claude-sonnet-5",
+    "claude-haiku-5-5",
+    "claude-fable-5-1",
+    "claude-fable-5",
+    # Claude 4.x
+    "claude-opus-4-8",
+    "claude-opus-4-7",
+    "claude-opus-4-6",
+    "claude-sonnet-4-6",
+    "claude-opus-4-5-20251101",
+    "claude-sonnet-4-5-20250929",
+    "claude-haiku-4-5-20251001",
+    "claude-opus-4-1-20250805",
+]
+
+# Aliases the CLI resolves itself to its current model of each family
+# (e.g. sonnet -> latest Sonnet). Also listed by /v1/models.
+CLAUDE_MODEL_ALIASES = [
+    "sonnet",
+    "opus",
+    "haiku",
+    "fable",
+    "best",
+    "opusplan",
+    "sonnet[1m]",
+    "opus[1m]",
+    "fable[1m]",
 ]
 
 _models_override = os.getenv("CLAUDE_MODELS_OVERRIDE", "").strip()
@@ -103,15 +126,31 @@ CLAUDE_MODELS = (
 # DEFAULT_MODEL_ENV is the explicit operator override; when unset, the wrapper
 # resolves the latest Sonnet from Anthropic's live Models API at startup and
 # stores it in RESOLVED_DEFAULT_MODEL. DEFAULT_MODEL_FALLBACK is used until/if
-# that resolution succeeds.
+# that resolution succeeds; it is the alias the CLI maps to its latest Sonnet.
 DEFAULT_MODEL_ENV: Optional[str] = os.getenv("DEFAULT_MODEL")
-DEFAULT_MODEL_FALLBACK = "claude-sonnet-4-6"
+DEFAULT_MODEL_FALLBACK = "sonnet"
 DEFAULT_MODEL = DEFAULT_MODEL_ENV or DEFAULT_MODEL_FALLBACK
 RESOLVED_DEFAULT_MODEL: Optional[str] = None
 
-# Fast model (for speed/cost optimization)
-# Can be overridden via FAST_MODEL environment variable
-FAST_MODEL = os.getenv("FAST_MODEL", "claude-haiku-4-5-20251001")
+
+def parse_model_aliases(value: Optional[str]) -> Dict[str, str]:
+    """Parse MODEL_ALIASES ("gpt-4o=sonnet,gpt-4o-mini=haiku") into a dict."""
+    pairs = (item.split("=", 1) for item in (value or "").split(",") if "=" in item)
+    return {
+        name.strip(): target.strip() for name, target in pairs if name.strip() and target.strip()
+    }
+
+
+# Request model names to rewrite before calling the SDK, e.g. gpt-4o=sonnet,
+# for clients that hard-code OpenAI model names.
+MODEL_ALIASES = parse_model_aliases(os.getenv("MODEL_ALIASES"))
+
+# Model the CLI switches to when the requested one is overloaded or unavailable.
+# Per request: X-Claude-Fallback-Model. Skipped when it equals the request's model.
+FALLBACK_MODEL: Optional[str] = os.getenv("FALLBACK_MODEL", "").strip() or None
+
+# Effort levels ClaudeAgentOptions.effort accepts.
+EFFORT_LEVELS = ("low", "medium", "high", "xhigh", "max")
 
 # Anthropic Models API configuration for dynamically refreshing /v1/models
 ANTHROPIC_MODELS_URL = os.getenv("ANTHROPIC_MODELS_URL", "https://api.anthropic.com/v1/models")

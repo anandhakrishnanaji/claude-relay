@@ -189,15 +189,18 @@ def _finished(body, resp_id, msg_id, created, chunks, prompt, text) -> ResponseO
         output_text=text,
         incomplete_details={"reason": reason} if reason else None,
         usage=_usage(chunks, prompt, text),
+        model=sdk_usage.extract_model(chunks, body.model),
     )
 
 
-def _response(body: ResponsesRequest, resp_id: str, created: int, status: str, **fields):
+def _response(
+    body: ResponsesRequest, resp_id: str, created: int, status: str, model=None, **fields
+):
     return ResponseObject(
         id=resp_id,
         created_at=created,
         status=status,
-        model=body.model,
+        model=model or body.model,
         instructions=body.instructions,
         max_output_tokens=body.max_output_tokens,
         metadata=body.metadata,
@@ -241,11 +244,14 @@ async def create_response(
 
     # No filter_content on the input: it would strip XML tags from the user's prompt
     prompt, system_prompt = MessageAdapter.messages_to_prompt(_to_messages(request_body))
-    ParameterValidator.validate_model(request_body.model)
+    # Apply MODEL_ALIASES and reject clearly non-Claude names, as chat completions does
+    model = ParameterValidator.resolve_model(request_body.model)
+    if model is None:
+        return main.model_error_response(main.unknown_model_message(request_body.model))
     completion_args = dict(
         prompt=prompt,
         system_prompt=system_prompt,
-        model=request_body.model,
+        model=model,
         max_turns=1,
         disallowed_tools=CLAUDE_TOOLS,
     )
@@ -269,8 +275,9 @@ async def create_response(
         raise HTTPException(status_code=500, detail=str(e))
 
     sdk_error = sdk_usage.result_error(chunks)
-    if sdk_error:
-        raise HTTPException(status_code=sdk_error["status"], detail=sdk_error["message"])
+    if sdk_error and sdk_error.get("code") == "model_not_found":
+        return main.model_error_response(sdk_error["message"])
+    main._raise_for_sdk_error(chunks)  # 401 for a Claude Code login failure, else 429/502
 
     raw_text = main.claude_cli.parse_claude_message(chunks)
     if raw_text is None:
@@ -309,17 +316,27 @@ async def _stream(
             # The ResultMessage repeats the whole text, so only assistant chunks are streamed
             if sdk_usage.find_result_message([chunk]):
                 continue
+            # The CLI's own login/model error text; reported as response.failed below
+            if chunk.get("error") in ("authentication_failed", "model_not_found"):
+                continue
             text = MessageAdapter.filter_content(claude_cli.parse_claude_message([chunk]) or "")
             if text and not text.isspace():
                 deltas.append(text)
                 yield event("response.output_text.delta", **part_ids, delta=text, logprobs=[])
-        sdk_error = sdk_usage.result_error(chunks)
+        from claude_relay import main
+
+        sdk_error = main._sdk_error(chunks)  # also records/clears the last login failure
     except Exception as e:
         logger.error(f"Responses streaming error: {e}")
         sdk_error = {"status": 500, "message": str(e)}
 
     if sdk_error:
-        code = "rate_limit_exceeded" if sdk_error["status"] == 429 else "server_error"
+        if sdk_error.get("auth_failure"):
+            code = "claude_cli_not_authenticated"
+        elif sdk_error.get("code") == "model_not_found":
+            code = "model_not_found"
+        else:
+            code = "rate_limit_exceeded" if sdk_error["status"] == 429 else "server_error"
         failed = _response(
             body, resp_id, created, "failed", error={"code": code, "message": sdk_error["message"]}
         )

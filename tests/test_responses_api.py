@@ -199,3 +199,55 @@ def test_stream_max_tokens_ends_with_incomplete():
         events = list(_sdk_client(client).responses.create(model=MODEL, input="hi", stream=True))
     assert events[-1].type == "response.incomplete"
     assert events[-1].response.incomplete_details.reason == "max_output_tokens"
+
+
+def _error_result(text):
+    return {"type": "result", "subtype": "success", "is_error": True, "result": text}
+
+
+def test_reports_model_that_ran():
+    ran = {**_assistant("Hi"), "model": "claude-haiku-5-5"}
+    with _client([ran, _result("Hi")]) as (client, opts):
+        r = client.post("/v1/responses", json={"model": "haiku", "input": "Say hi"})
+    assert r.status_code == 200
+    assert r.json()["model"] == "claude-haiku-5-5"
+    assert opts["model"] == "haiku"
+
+
+def test_non_claude_model_rejected_unless_mapped():
+    with _client([_assistant("Hi"), _result("Hi")]) as (client, opts):
+        r = client.post("/v1/responses", json={"model": "gpt-4o", "input": "Say hi"})
+        assert r.status_code == 400
+        assert r.json()["error"]["code"] == "model_not_found"
+        assert opts == {}
+        with patch.object(main.constants, "MODEL_ALIASES", {"gpt-4o": "haiku"}):
+            r = client.post("/v1/responses", json={"model": "gpt-4o", "input": "Say hi"})
+    assert r.status_code == 200
+    assert opts["model"] == "haiku"
+
+
+def test_cli_model_rejection_gives_400():
+    rejected = {
+        **_assistant("There's an issue with the selected model"),
+        "error": "model_not_found",
+    }
+    with _client([rejected, _error_result("bad model")]) as (client, _):
+        r = client.post("/v1/responses", json={"model": "claude-nope", "input": "hi"})
+    assert r.status_code == 400
+    assert r.json()["error"]["code"] == "model_not_found"
+
+
+def test_login_failure_gives_401_and_failed_stream_event():
+    logged_out = {
+        **_assistant("Not logged in · Please run /login"),
+        "error": "authentication_failed",
+    }
+    chunks = [logged_out, _error_result("Not logged in · Please run /login")]
+    with _client(chunks) as (client, _):
+        r = client.post("/v1/responses", json={"model": MODEL, "input": "hi"})
+        assert r.status_code == 401
+        assert r.json()["error"]["code"] == "claude_cli_not_authenticated"
+        r = client.post("/v1/responses", json={"model": MODEL, "input": "hi", "stream": True})
+    assert '"type": "response.failed"' in r.text
+    assert "claude_cli_not_authenticated" in r.text
+    assert "Please run /login" not in r.text.split('"response.failed"')[0]

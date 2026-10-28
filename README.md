@@ -357,8 +357,9 @@ The `Dockerfile` in the repo root builds the same non-root image, and the includ
 | `CLAUDE_AUTH_METHOD` | Auth method: `cli`, `api_key`, `bedrock`, `vertex` | auto-detect |
 | `ANTHROPIC_API_KEY` | Direct Anthropic API key. Optional — also unlocks live `/v1/models` discovery and dynamic latest-Sonnet default. Not required when using Bedrock, Vertex, or Claude CLI subscription auth. | - |
 | `API_KEYS` | Comma-separated client API keys | - |
-| `DEFAULT_MODEL` | Override the default model. When unset and `ANTHROPIC_API_KEY` is configured, the wrapper resolves the latest Sonnet at startup; otherwise falls back to `claude-sonnet-4-6`. | auto |
-| `FAST_MODEL` | Speed/cost-optimized model alias. | `claude-haiku-4-5-20251001` |
+| `DEFAULT_MODEL` | Override the default model. When unset and `ANTHROPIC_API_KEY` is configured, the wrapper resolves the latest Sonnet at startup; otherwise it uses the `sonnet` alias, which Claude Code maps to its latest Sonnet. | auto |
+| `MODEL_ALIASES` | Comma-separated `name=model` pairs applied to the request's `model` on both endpoints, for clients that hard-code other names, e.g. `gpt-4o=sonnet,gpt-4o-mini=haiku`. | - |
+| `FALLBACK_MODEL` | Model Claude Code switches to when the requested one is overloaded or unavailable. Ignored when it equals the request's model. Per request: `X-Claude-Fallback-Model` header. | - |
 | `CLAUDE_MODELS_OVERRIDE` | Comma-separated model IDs to advertise via `/v1/models`. Takes precedence over both live and static lists. | - |
 | `MODEL_LIST_CACHE_TTL_SECONDS` | Cache TTL for live `/v1/models` results. | `3600` |
 | `MODEL_LIST_ERROR_TTL_SECONDS` | Short cache TTL applied when the live fetch fails, so transient outages don't suppress live discovery for the full hour. | `60` |
@@ -479,19 +480,27 @@ for event in client.responses.create(model="claude-sonnet-4-6", input="Hi", stre
 
 ## Supported Models
 
-The wrapper exposes Claude's full model catalog. When `ANTHROPIC_API_KEY` is set, `/v1/models` returns Anthropic's live list (cached for 1 hour) and the wrapper picks the latest Sonnet as `DEFAULT_MODEL` at startup. When the key is absent — for example, when running with Bedrock, Vertex, or Claude CLI subscription auth — the static list below is served and `claude-sonnet-4-6` is used as the fallback default. Operators who want a curated list regardless of auth can set `CLAUDE_MODELS_OVERRIDE`.
+The wrapper exposes Claude's full model catalog. When `ANTHROPIC_API_KEY` is set, `/v1/models` returns Anthropic's live list (cached for 1 hour) and the wrapper picks the latest Sonnet as `DEFAULT_MODEL` at startup. When the key is absent — for example, when running with Bedrock, Vertex, or Claude CLI subscription auth — the static list below is served and the `sonnet` alias is the default. Operators who want a curated list regardless of auth can set `CLAUDE_MODELS_OVERRIDE`.
 
-### Claude 4.6 Family (Latest)
-- **`claude-opus-4-6`** 🎯 Most capable
-- **`claude-sonnet-4-6`** ⭐ Recommended — best coding model
+Responses report the model that actually ran (e.g. `claude-haiku-5-5` for a request for `haiku`).
 
-### Claude 4.5 Family (Fall 2025)
-- `claude-opus-4-5-20250929` — deep reasoning and coding
-- `claude-sonnet-4-5-20250929` — agents and coding
-- **`claude-haiku-4-5-20251001`** ⚡ Fast & cheap
+**Effort and thinking:** on `/v1/chat/completions`, OpenAI `reasoning_effort` maps to Claude's effort level (`none`/`minimal` -> `low`, `low`, `medium`, `high`, `xhigh`). The `X-Claude-Effort` header (`low`, `medium`, `high`, `xhigh`, `max`) overrides it, and `X-Claude-Max-Thinking-Tokens` sets a thinking budget (`0` turns thinking off). `/v1/messages` accepts Anthropic's `thinking` and `output_config.effort`. `max_tokens` is ignored: Claude Code has no per-request output cap.
 
-### Claude 4.1 Family
-- `claude-opus-4-1-20250805` — upgraded Opus 4
+Model names are checked before Claude Code runs. Names that are not Claude models (no `claude` in the name and not an alias, e.g. `gpt-4o`) get a 400 unless `MODEL_ALIASES` maps them. Other `claude-*` names are passed through, so new models work before this list is updated; if Claude Code does not know one, the request fails with a 400 (`model_not_found` on `/v1/chat/completions`, `invalid_request_error` on `/v1/messages`). Bedrock ARNs without `claude` in them need a `MODEL_ALIASES` entry.
+
+### Aliases
+`sonnet`, `opus`, `haiku`, `fable`, `best`, `opusplan`, `sonnet[1m]`, `opus[1m]` and `fable[1m]`. Claude Code resolves them to its current model of that family, and `/v1/models` lists them (unless `CLAUDE_MODELS_OVERRIDE` is set).
+
+### Claude 5.x
+- `claude-opus-5-5`, `claude-opus-5`
+- `claude-sonnet-5-5`, `claude-sonnet-5`
+- `claude-haiku-5-5`
+- `claude-fable-5-1`, `claude-fable-5`
+
+### Claude 4.x
+- `claude-opus-4-8`, `claude-opus-4-7`, `claude-opus-4-6`, `claude-opus-4-5-20251101`, `claude-opus-4-1-20250805`
+- `claude-sonnet-4-6`, `claude-sonnet-4-5-20250929`
+- `claude-haiku-4-5-20251001`
 
 **Note:** Claude 3.x models are not supported by the Claude Agent SDK. The model parameter is passed to Claude Code via the SDK's model selection.
 
@@ -711,7 +720,7 @@ On `/v1/chat/completions` and `/v1/responses`, yes: pass `"stream": true` to get
 No. OpenAI-style `tools`/function calling is not mapped. Claude Code's own tools (Bash, Read, Write and others) can be turned on per request with `"enable_tools": true` once the server sets `ALLOW_TOOLS=true`.
 
 ### Which models can I use?
-Any model Claude Code accepts, such as `claude-sonnet-4-6`, `claude-opus-4-6` and `claude-haiku-4-5-20251001`. With `ANTHROPIC_API_KEY` set, `/v1/models` returns Anthropic's live list. See [Supported Models](#supported-models).
+Any model Claude Code accepts, such as `sonnet`, `claude-opus-5-5` and `claude-haiku-4-5-20251001`. Map other names (e.g. `gpt-4o`) with `MODEL_ALIASES`. With `ANTHROPIC_API_KEY` set, `/v1/models` returns Anthropic's live list. See [Supported Models](#supported-models).
 
 ### Is it safe to expose on a network?
 Set `API_KEY` so clients must send a bearer token, keep tools off unless you need them, and keep it on a private network. See [API Security Configuration](#-api-security-configuration).

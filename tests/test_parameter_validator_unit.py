@@ -21,13 +21,28 @@ class TestParameterValidatorValidateModel:
         result = ParameterValidator.validate_model("claude-sonnet-4-5-20250929")
         assert result is True
 
-    def test_unknown_model_returns_true_with_warning(self):
-        """Unknown model returns True (graceful degradation) with warning logged."""
+    def test_unlisted_claude_model_returns_true(self):
+        """Unlisted claude-* names pass so new models work; the CLI rejects typos."""
+        assert ParameterValidator.validate_model("claude-sonnet-9") is True
+        assert ParameterValidator.validate_model("us.anthropic.claude-opus-4-8") is True
+
+    def test_aliases_return_true(self):
+        for alias in ("sonnet", "Opus", "haiku", "opusplan", "sonnet[1m]"):
+            assert ParameterValidator.validate_model(alias) is True
+
+    def test_non_claude_model_returns_false_with_warning(self):
+        """Names that are clearly not Claude are rejected with a warning."""
         with patch("claude_relay.parameter_validator.logger") as mock_logger:
-            result = ParameterValidator.validate_model("unknown-model-xyz")
-            assert result is True
+            result = ParameterValidator.validate_model("gpt-4o")
+            assert result is False
             mock_logger.warning.assert_called_once()
-            assert "unknown-model-xyz" in str(mock_logger.warning.call_args)
+            assert "gpt-4o" in str(mock_logger.warning.call_args)
+
+    def test_resolve_model_applies_aliases(self):
+        with patch("claude_relay.constants.MODEL_ALIASES", {"gpt-4o": "haiku"}):
+            assert ParameterValidator.resolve_model("gpt-4o") == "haiku"
+            assert ParameterValidator.resolve_model("claude-opus-5") == "claude-opus-5"
+            assert ParameterValidator.resolve_model("gpt-4o-mini") is None
 
     def test_all_known_models_valid(self):
         """All models in SUPPORTED_MODELS are valid."""

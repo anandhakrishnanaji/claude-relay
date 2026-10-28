@@ -43,18 +43,13 @@ class TestParameterValidatorProperties:
     def test_valid_model_names_accepted(self, model: str):
         """Valid Claude model names should be accepted."""
         result = ParameterValidator.validate_model(model)
-        # validate_model always returns True (allows graceful degradation)
         assert result is True
 
     @given(model=st.text(min_size=1, max_size=50))
     @settings(max_examples=30)
-    def test_any_model_name_accepted_gracefully(self, model: str):
-        """Any model name is accepted (graceful degradation)."""
-        assume(model.strip())  # Non-empty
-
-        # validate_model always returns True to allow trying unknown models
-        result = ParameterValidator.validate_model(model)
-        assert result is True
+    def test_any_claude_model_name_accepted(self, model: str):
+        """Any name containing "claude" is accepted, so new models keep working."""
+        assert ParameterValidator.validate_model(f"claude-{model}") is True
 
     @given(permission_mode=st.sampled_from(["default", "acceptEdits", "bypassPermissions", "plan"]))
     @settings(max_examples=10)

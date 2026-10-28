@@ -71,6 +71,7 @@ from claude_relay.constants import (
     ANTHROPIC_VERSION,
     CORS_ORIGINS,
     CLAUDE_MODELS,
+    CLAUDE_MODEL_ALIASES,
     CLAUDE_TOOLS,
     DEFAULT_ALLOWED_TOOLS,
     DEFAULT_MODEL_FALLBACK,
@@ -676,21 +677,12 @@ async def generate_streaming_response(
                 system_prompt = sampling_instructions
             logger.debug(f"Added sampling instructions: {sampling_instructions}")
 
-        # Filter content for unsupported features
-        prompt = MessageAdapter.filter_content(prompt)
-        if system_prompt:
-            system_prompt = MessageAdapter.filter_content(system_prompt)
-
         # Get Claude Agent SDK options from request
         claude_options = request.to_claude_options()
 
         # Merge with Claude-specific headers if provided
         if claude_headers:
             claude_options.update(claude_headers)
-
-        # Validate model
-        if claude_options.get("model"):
-            ParameterValidator.validate_model(claude_options["model"])
 
         # Handle tools - disabled by default for OpenAI compatibility
         if not request.enable_tools:
@@ -713,6 +705,7 @@ async def generate_streaming_response(
         chunks_buffer = []
         role_sent = False  # Track if we've sent the initial role chunk
         content_sent = False  # Track if we've sent any content
+        response_model = request.model  # Replaced by the real model once the SDK reports it
 
         async for chunk in claude_cli.run_completion(
             prompt=prompt,
@@ -722,11 +715,21 @@ async def generate_streaming_response(
             allowed_tools=claude_options.get("allowed_tools"),
             disallowed_tools=claude_options.get("disallowed_tools"),
             permission_mode=claude_options.get("permission_mode"),
+            thinking=ParameterValidator.thinking_from_budget(
+                claude_options.get("max_thinking_tokens")
+            ),
+            effort=claude_options.get("effort"),
+            fallback_model=claude_options.get("fallback_model"),
             stream=True,
         ):
             chunks_buffer.append(chunk)
+            response_model = sdk_usage.extract_model([chunk], response_model)
             if chunk.get("error") == "authentication_failed":
                 continue  # the CLI's login error text; reported as an error chunk below
+            if chunk.get("error") == "model_not_found" and not role_sent:
+                raise ModelNotFoundError(
+                    claude_cli.parse_claude_message([chunk]) or "Unknown model"
+                )
 
             # Check if we have an assistant message
             # Handle both old format (type/message structure) and new format (direct content)
@@ -745,7 +748,7 @@ async def generate_streaming_response(
                 if not role_sent:
                     initial_chunk = ChatCompletionStreamResponse(
                         id=request_id,
-                        model=request.model,
+                        model=response_model,
                         choices=[
                             StreamChoice(
                                 index=0,
@@ -776,7 +779,7 @@ async def generate_streaming_response(
                             # Create streaming chunk
                             stream_chunk = ChatCompletionStreamResponse(
                                 id=request_id,
-                                model=request.model,
+                                model=response_model,
                                 choices=[
                                     StreamChoice(
                                         index=0,
@@ -797,7 +800,7 @@ async def generate_streaming_response(
                         # Create streaming chunk
                         stream_chunk = ChatCompletionStreamResponse(
                             id=request_id,
-                            model=request.model,
+                            model=response_model,
                             choices=[
                                 StreamChoice(
                                     index=0, delta={"content": filtered_content}, finish_reason=None
@@ -820,7 +823,7 @@ async def generate_streaming_response(
             # Send role chunk with empty content if we never got any assistant messages
             initial_chunk = ChatCompletionStreamResponse(
                 id=request_id,
-                model=request.model,
+                model=response_model,
                 choices=[
                     StreamChoice(
                         index=0, delta={"role": "assistant", "content": ""}, finish_reason=None
@@ -834,7 +837,7 @@ async def generate_streaming_response(
         if role_sent and not content_sent:
             fallback_chunk = ChatCompletionStreamResponse(
                 id=request_id,
-                model=request.model,
+                model=response_model,
                 choices=[
                     StreamChoice(
                         index=0,
@@ -871,7 +874,7 @@ async def generate_streaming_response(
         # Send final chunk with finish reason and optionally usage data
         final_chunk = ChatCompletionStreamResponse(
             id=request_id,
-            model=request.model,
+            model=response_model,
             choices=[
                 StreamChoice(
                     index=0, delta={}, finish_reason=sdk_usage.openai_finish_reason(chunks_buffer)
@@ -882,10 +885,39 @@ async def generate_streaming_response(
         yield f"data: {final_chunk.model_dump_json()}\n\n"
         yield "data: [DONE]\n\n"
 
+    except ModelNotFoundError:
+        raise  # chat_completions turns it into a 400 before the stream starts
     except Exception as e:
         logger.error(f"Streaming error: {e}")
         error_chunk = {"error": {"message": str(e), "type": "streaming_error"}}
         yield f"data: {json.dumps(error_chunk)}\n\n"
+
+
+class ModelNotFoundError(Exception):
+    """The CLI rejected the requested model before producing any output."""
+
+
+def model_error_response(message: str, anthropic: bool = False) -> JSONResponse:
+    """400 for an unknown model, in the OpenAI or Anthropic error format."""
+    if anthropic:
+        content = {"type": "error", "error": {"type": "invalid_request_error", "message": message}}
+    else:
+        content = {
+            "error": {
+                "message": message,
+                "type": "invalid_request_error",
+                "param": "model",
+                "code": "model_not_found",
+            }
+        }
+    return JSONResponse(status_code=400, content=content)
+
+
+def unknown_model_message(model: str) -> str:
+    return (
+        f"The model '{model}' is not a Claude model. Use a Claude model ID or alias "
+        "(see /v1/models), or map it with MODEL_ALIASES on the server."
+    )
 
 
 TOOLS_DISABLED_MESSAGE = (
@@ -936,6 +968,12 @@ async def chat_completions(
         # Extract Claude-specific parameters from headers
         claude_headers = ParameterValidator.extract_claude_headers(dict(request.headers))
 
+        # Apply MODEL_ALIASES; the merged options override the request's own model
+        model = ParameterValidator.resolve_model(request_body.model)
+        if model is None:
+            return model_error_response(unknown_model_message(request_body.model))
+        claude_headers["model"] = model
+
         # Log compatibility info
         if logger.isEnabledFor(logging.DEBUG):
             compatibility_report = CompatibilityReporter.generate_compatibility_report(request_body)
@@ -943,8 +981,20 @@ async def chat_completions(
 
         if request_body.stream:
             # Return streaming response
+            stream = generate_streaming_response(request_body, request_id, claude_headers)
+            # Wait for the first event so an unknown model is still a plain 400
+            try:
+                first_event = await stream.__anext__()
+            except ModelNotFoundError as e:
+                return model_error_response(str(e))
+
+            async def events():
+                yield first_event
+                async for event in stream:
+                    yield event
+
             return StreamingResponse(
-                generate_streaming_response(request_body, request_id, claude_headers),
+                events(),
                 media_type="text/event-stream",
                 headers={
                     "Cache-Control": "no-cache",
@@ -974,21 +1024,12 @@ async def chat_completions(
                     system_prompt = sampling_instructions
                 logger.debug(f"Added sampling instructions: {sampling_instructions}")
 
-            # Filter content
-            prompt = MessageAdapter.filter_content(prompt)
-            if system_prompt:
-                system_prompt = MessageAdapter.filter_content(system_prompt)
-
             # Get Claude Agent SDK options from request
             claude_options = request_body.to_claude_options()
 
             # Merge with Claude-specific headers
             if claude_headers:
                 claude_options.update(claude_headers)
-
-            # Validate model
-            if claude_options.get("model"):
-                ParameterValidator.validate_model(claude_options["model"])
 
             # Handle tools - disabled by default for OpenAI compatibility
             if not request_body.enable_tools:
@@ -1017,10 +1058,18 @@ async def chat_completions(
                 allowed_tools=claude_options.get("allowed_tools"),
                 disallowed_tools=claude_options.get("disallowed_tools"),
                 permission_mode=claude_options.get("permission_mode"),
+                thinking=ParameterValidator.thinking_from_budget(
+                    claude_options.get("max_thinking_tokens")
+                ),
+                effort=claude_options.get("effort"),
+                fallback_model=claude_options.get("fallback_model"),
                 stream=False,
             ):
                 chunks.append(chunk)
 
+            sdk_error = sdk_usage.result_error(chunks)
+            if sdk_error and sdk_error.get("code") == "model_not_found":
+                return model_error_response(sdk_error["message"])
             _raise_for_sdk_error(chunks)
 
             # Extract assistant message
@@ -1047,7 +1096,7 @@ async def chat_completions(
             # Create response
             response = ChatCompletionResponse(
                 id=request_id,
-                model=request_body.model,
+                model=sdk_usage.extract_model(chunks, request_body.model),
                 choices=[
                     Choice(
                         index=0,
@@ -1106,6 +1155,10 @@ async def anthropic_messages(
     try:
         logger.info(f"Anthropic Messages API request: model={request_body.model}")
 
+        model = ParameterValidator.resolve_model(request_body.model)
+        if model is None:
+            return model_error_response(unknown_model_message(request_body.model), anthropic=True)
+
         # Convert Anthropic messages to internal format
         messages = request_body.to_openai_messages()
 
@@ -1119,11 +1172,6 @@ async def anthropic_messages(
 
         prompt = "\n\n".join(prompt_parts)
         system_prompt = request_body.system_text()
-
-        # Filter content
-        prompt = MessageAdapter.filter_content(prompt)
-        if system_prompt:
-            system_prompt = MessageAdapter.filter_content(system_prompt)
 
         # Tools are disabled by default, same as /v1/chat/completions: the prompt
         # may carry untrusted text, and with tools on it would drive an agent that
@@ -1142,12 +1190,21 @@ async def anthropic_messages(
         async for chunk in claude_cli.run_completion(
             prompt=prompt,
             system_prompt=system_prompt,
-            model=request_body.model,
+            model=model,
             stream=False,
+            thinking=(
+                request_body.thinking.model_dump(exclude_none=True)
+                if request_body.thinking
+                else None
+            ),
+            effort=request_body.output_config.effort if request_body.output_config else None,
             **tool_options,
         ):
             chunks.append(chunk)
 
+        sdk_error = sdk_usage.result_error(chunks)
+        if sdk_error and sdk_error.get("code") == "model_not_found":
+            return model_error_response(sdk_error["message"], anthropic=True)
         _raise_for_sdk_error(chunks)
 
         # Extract assistant message
@@ -1171,7 +1228,7 @@ async def anthropic_messages(
 
         # Create Anthropic-format response
         response = AnthropicMessagesResponse(
-            model=request_body.model,
+            model=sdk_usage.extract_model(chunks, request_body.model),
             content=[AnthropicTextBlock(text=assistant_content)],
             stop_reason=sdk_usage.anthropic_stop_reason(chunks),
             usage=anthropic_usage,
@@ -1194,7 +1251,16 @@ async def list_models(
     # Check FastAPI API key if configured
     await verify_api_key(request, credentials)
 
-    return {"object": "list", "data": await get_available_models()}
+    models = await get_available_models()
+    if not os.getenv("CLAUDE_MODELS_OVERRIDE", "").strip():
+        # Added here, not in get_available_models, so "sonnet[1m]" never wins
+        # _pick_latest_sonnet
+        now = int(datetime.now(timezone.utc).timestamp())
+        models = models + [
+            {"id": alias, "object": "model", "created": now, "owned_by": "anthropic"}
+            for alias in CLAUDE_MODEL_ALIASES
+        ]
+    return {"object": "list", "data": models}
 
 
 @app.post("/v1/compatibility")
