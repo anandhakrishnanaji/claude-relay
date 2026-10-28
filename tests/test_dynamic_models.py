@@ -4,7 +4,7 @@ import asyncio
 
 import pytest
 
-from src import constants, main
+from claude_relay import constants, main
 
 
 @pytest.mark.asyncio
@@ -193,7 +193,7 @@ async def test_resolve_default_model_skips_without_api_key(monkeypatch, caplog):
     monkeypatch.setattr(constants, "DEFAULT_MODEL_ENV", None)
     monkeypatch.setattr(main, "_fetch_anthropic_models", fake_fetch)
 
-    with caplog.at_level("INFO", logger="src.main"):
+    with caplog.at_level("INFO", logger="claude_relay.main"):
         resolved = await main.resolve_default_model()
 
     assert resolved is None
@@ -219,7 +219,7 @@ async def test_resolve_default_model_honors_env_override(monkeypatch):
 
 
 def test_get_default_model_prefers_resolved_over_fallback(monkeypatch):
-    from src import models as models_module
+    from claude_relay import models as models_module
 
     monkeypatch.setattr(constants, "DEFAULT_MODEL_ENV", None)
     monkeypatch.setattr(constants, "RESOLVED_DEFAULT_MODEL", "claude-sonnet-future")
@@ -228,7 +228,7 @@ def test_get_default_model_prefers_resolved_over_fallback(monkeypatch):
 
 
 def test_get_default_model_env_override_wins(monkeypatch):
-    from src import models as models_module
+    from claude_relay import models as models_module
 
     monkeypatch.setattr(constants, "DEFAULT_MODEL_ENV", "claude-opus-4-6")
     monkeypatch.setattr(constants, "RESOLVED_DEFAULT_MODEL", "claude-sonnet-future")

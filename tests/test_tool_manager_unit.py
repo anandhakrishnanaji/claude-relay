@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Unit tests for src/tool_manager.py
+Unit tests for claude_relay/tool_manager.py
 
 Tests the ToolMetadata, ToolConfiguration, and ToolManager classes.
 These are pure unit tests that don't require a running server.
@@ -12,14 +12,14 @@ from unittest.mock import patch, MagicMock
 import threading
 import time
 
-from src.tool_manager import (
+from claude_relay.tool_manager import (
     ToolMetadata,
     ToolConfiguration,
     ToolManager,
     TOOL_METADATA,
     tool_manager,
 )
-from src.constants import CLAUDE_TOOLS, DEFAULT_ALLOWED_TOOLS, DEFAULT_DISALLOWED_TOOLS
+from claude_relay.constants import CLAUDE_TOOLS, DEFAULT_ALLOWED_TOOLS, DEFAULT_DISALLOWED_TOOLS
 
 
 class TestToolMetadata:

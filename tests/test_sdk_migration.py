@@ -59,7 +59,7 @@ class TestConstants:
 
     def test_claude_models_defined(self):
         """Test that CLAUDE_MODELS constant exists and has expected models."""
-        from src.constants import CLAUDE_MODELS
+        from claude_relay.constants import CLAUDE_MODELS
 
         assert isinstance(CLAUDE_MODELS, list)
         assert len(CLAUDE_MODELS) > 0
@@ -71,21 +71,21 @@ class TestConstants:
 
     def test_default_model_defined(self):
         """Test that DEFAULT_MODEL is set to recommended model."""
-        from src.constants import DEFAULT_MODEL, CLAUDE_MODELS
+        from claude_relay.constants import DEFAULT_MODEL, CLAUDE_MODELS
 
         assert DEFAULT_MODEL in CLAUDE_MODELS
         assert DEFAULT_MODEL == "claude-sonnet-4-6"
 
     def test_fast_model_defined(self):
         """Test that FAST_MODEL is set to fastest model."""
-        from src.constants import FAST_MODEL, CLAUDE_MODELS
+        from claude_relay.constants import FAST_MODEL, CLAUDE_MODELS
 
         assert FAST_MODEL in CLAUDE_MODELS
         assert FAST_MODEL == "claude-haiku-4-5-20251001"
 
     def test_claude_tools_defined(self):
         """Test that CLAUDE_TOOLS constant exists."""
-        from src.constants import CLAUDE_TOOLS
+        from claude_relay.constants import CLAUDE_TOOLS
 
         assert isinstance(CLAUDE_TOOLS, list)
         assert len(CLAUDE_TOOLS) > 0
@@ -101,13 +101,13 @@ class TestMessageHandling:
 
     def test_message_adapter_import(self):
         """Test that MessageAdapter can be imported."""
-        from src.message_adapter import MessageAdapter
+        from claude_relay.message_adapter import MessageAdapter
 
         assert MessageAdapter is not None
 
     def test_filter_content_basic(self):
         """Test basic content filtering."""
-        from src.message_adapter import MessageAdapter
+        from claude_relay.message_adapter import MessageAdapter
 
         # Test with simple text
         result = MessageAdapter.filter_content("Hello world")
@@ -115,7 +115,7 @@ class TestMessageHandling:
 
     def test_filter_content_with_images(self):
         """Test content filtering with image references in output."""
-        from src.message_adapter import MessageAdapter
+        from claude_relay.message_adapter import MessageAdapter
 
         # Test with image reference in Claude's output (string format)
         content = "Here is the result: [Image: example.jpg] as you can see."
@@ -131,13 +131,13 @@ class TestAPIModels:
 
     def test_chat_completion_request_import(self):
         """Test that ChatCompletionRequest can be imported."""
-        from src.models import ChatCompletionRequest
+        from claude_relay.models import ChatCompletionRequest
 
         assert ChatCompletionRequest is not None
 
     def test_chat_completion_request_creation(self):
         """Test creating a ChatCompletionRequest."""
-        from src.models import ChatCompletionRequest
+        from claude_relay.models import ChatCompletionRequest
 
         request = ChatCompletionRequest(
             model="claude-sonnet-4-5-20250929", messages=[{"role": "user", "content": "Hello"}]

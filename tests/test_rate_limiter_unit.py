@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Unit tests for src/rate_limiter.py
+Unit tests for claude_relay/rate_limiter.py
 
 Tests the rate limiting functions and configuration.
 These are pure unit tests that don't require a running server.
@@ -20,11 +20,11 @@ class TestGetRateLimitKey:
 
     def test_returns_remote_address(self):
         """Should return the remote address from the request."""
-        with patch("src.rate_limiter.get_remote_address") as mock_get_addr:
+        with patch("claude_relay.rate_limiter.get_remote_address") as mock_get_addr:
             mock_get_addr.return_value = "192.168.1.100"
             mock_request = MagicMock(spec=Request)
 
-            from src.rate_limiter import get_rate_limit_key
+            from claude_relay.rate_limiter import get_rate_limit_key
 
             result = get_rate_limit_key(mock_request)
             assert result == "192.168.1.100"
@@ -39,40 +39,40 @@ class TestCreateRateLimiter:
         with patch.dict(os.environ, {"RATE_LIMIT_ENABLED": "false"}):
             # Need to reimport to pick up new env var
             import importlib
-            import src.rate_limiter
+            import claude_relay.rate_limiter
 
-            importlib.reload(src.rate_limiter)
-            result = src.rate_limiter.create_rate_limiter()
+            importlib.reload(claude_relay.rate_limiter)
+            result = claude_relay.rate_limiter.create_rate_limiter()
             assert result is None
 
     def test_rate_limiter_enabled_returns_limiter(self):
         """When RATE_LIMIT_ENABLED=true, returns Limiter instance."""
         with patch.dict(os.environ, {"RATE_LIMIT_ENABLED": "true"}):
             import importlib
-            import src.rate_limiter
+            import claude_relay.rate_limiter
 
-            importlib.reload(src.rate_limiter)
-            result = src.rate_limiter.create_rate_limiter()
+            importlib.reload(claude_relay.rate_limiter)
+            result = claude_relay.rate_limiter.create_rate_limiter()
             assert result is not None
 
     def test_rate_limiter_disabled_with_0(self):
         """When RATE_LIMIT_ENABLED=0, returns None."""
         with patch.dict(os.environ, {"RATE_LIMIT_ENABLED": "0"}):
             import importlib
-            import src.rate_limiter
+            import claude_relay.rate_limiter
 
-            importlib.reload(src.rate_limiter)
-            result = src.rate_limiter.create_rate_limiter()
+            importlib.reload(claude_relay.rate_limiter)
+            result = claude_relay.rate_limiter.create_rate_limiter()
             assert result is None
 
     def test_rate_limiter_disabled_with_no(self):
         """When RATE_LIMIT_ENABLED=no, returns None."""
         with patch.dict(os.environ, {"RATE_LIMIT_ENABLED": "no"}):
             import importlib
-            import src.rate_limiter
+            import claude_relay.rate_limiter
 
-            importlib.reload(src.rate_limiter)
-            result = src.rate_limiter.create_rate_limiter()
+            importlib.reload(claude_relay.rate_limiter)
+            result = claude_relay.rate_limiter.create_rate_limiter()
             assert result is None
 
     def test_rate_limiter_enabled_by_default(self):
@@ -84,10 +84,10 @@ class TestCreateRateLimiter:
 
         with patch.dict(os.environ, env_copy, clear=True):
             import importlib
-            import src.rate_limiter
+            import claude_relay.rate_limiter
 
-            importlib.reload(src.rate_limiter)
-            result = src.rate_limiter.create_rate_limiter()
+            importlib.reload(claude_relay.rate_limiter)
+            result = claude_relay.rate_limiter.create_rate_limiter()
             assert result is not None
 
 
@@ -108,7 +108,7 @@ class TestRateLimitExceededHandler:
 
     def test_returns_json_response(self, mock_rate_limit_exceeded):
         """Returns a JSONResponse."""
-        from src.rate_limiter import rate_limit_exceeded_handler
+        from claude_relay.rate_limiter import rate_limit_exceeded_handler
 
         mock_request = MagicMock(spec=Request)
 
@@ -117,7 +117,7 @@ class TestRateLimitExceededHandler:
 
     def test_returns_429_status(self, mock_rate_limit_exceeded):
         """Returns 429 Too Many Requests status."""
-        from src.rate_limiter import rate_limit_exceeded_handler
+        from claude_relay.rate_limiter import rate_limit_exceeded_handler
 
         mock_request = MagicMock(spec=Request)
 
@@ -126,7 +126,7 @@ class TestRateLimitExceededHandler:
 
     def test_includes_retry_after_header(self, mock_rate_limit_exceeded):
         """Response includes Retry-After header."""
-        from src.rate_limiter import rate_limit_exceeded_handler
+        from claude_relay.rate_limiter import rate_limit_exceeded_handler
 
         mock_request = MagicMock(spec=Request)
 
@@ -146,87 +146,87 @@ class TestGetRateLimitForEndpoint:
                 del os.environ["RATE_LIMIT_CHAT_PER_MINUTE"]
 
             import importlib
-            import src.rate_limiter
+            import claude_relay.rate_limiter
 
-            importlib.reload(src.rate_limiter)
-            result = src.rate_limiter.get_rate_limit_for_endpoint("chat")
+            importlib.reload(claude_relay.rate_limiter)
+            result = claude_relay.rate_limiter.get_rate_limit_for_endpoint("chat")
             assert result == "10/minute"
 
     def test_debug_endpoint_default(self):
         """Debug endpoint has default rate limit."""
         import importlib
-        import src.rate_limiter
+        import claude_relay.rate_limiter
 
         # Clear any override
         env_copy = {k: v for k, v in os.environ.items() if k != "RATE_LIMIT_DEBUG_PER_MINUTE"}
         with patch.dict(os.environ, env_copy, clear=True):
-            importlib.reload(src.rate_limiter)
-            result = src.rate_limiter.get_rate_limit_for_endpoint("debug")
+            importlib.reload(claude_relay.rate_limiter)
+            result = claude_relay.rate_limiter.get_rate_limit_for_endpoint("debug")
             assert result == "2/minute"
 
     def test_health_endpoint_default(self):
         """Health endpoint has default rate limit."""
         import importlib
-        import src.rate_limiter
+        import claude_relay.rate_limiter
 
         env_copy = {k: v for k, v in os.environ.items() if k != "RATE_LIMIT_HEALTH_PER_MINUTE"}
         with patch.dict(os.environ, env_copy, clear=True):
-            importlib.reload(src.rate_limiter)
-            result = src.rate_limiter.get_rate_limit_for_endpoint("health")
+            importlib.reload(claude_relay.rate_limiter)
+            result = claude_relay.rate_limiter.get_rate_limit_for_endpoint("health")
             assert result == "30/minute"
 
     def test_session_endpoint_default(self):
         """Session endpoint has default rate limit."""
         import importlib
-        import src.rate_limiter
+        import claude_relay.rate_limiter
 
         env_copy = {k: v for k, v in os.environ.items() if k != "RATE_LIMIT_SESSION_PER_MINUTE"}
         with patch.dict(os.environ, env_copy, clear=True):
-            importlib.reload(src.rate_limiter)
-            result = src.rate_limiter.get_rate_limit_for_endpoint("session")
+            importlib.reload(claude_relay.rate_limiter)
+            result = claude_relay.rate_limiter.get_rate_limit_for_endpoint("session")
             assert result == "15/minute"
 
     def test_auth_endpoint_default(self):
         """Auth endpoint has default rate limit."""
         import importlib
-        import src.rate_limiter
+        import claude_relay.rate_limiter
 
         env_copy = {k: v for k, v in os.environ.items() if k != "RATE_LIMIT_AUTH_PER_MINUTE"}
         with patch.dict(os.environ, env_copy, clear=True):
-            importlib.reload(src.rate_limiter)
-            result = src.rate_limiter.get_rate_limit_for_endpoint("auth")
+            importlib.reload(claude_relay.rate_limiter)
+            result = claude_relay.rate_limiter.get_rate_limit_for_endpoint("auth")
             assert result == "10/minute"
 
     def test_general_endpoint_default(self):
         """General/unknown endpoint has default rate limit."""
         import importlib
-        import src.rate_limiter
+        import claude_relay.rate_limiter
 
         env_copy = {k: v for k, v in os.environ.items() if k != "RATE_LIMIT_PER_MINUTE"}
         with patch.dict(os.environ, env_copy, clear=True):
-            importlib.reload(src.rate_limiter)
-            result = src.rate_limiter.get_rate_limit_for_endpoint("general")
+            importlib.reload(claude_relay.rate_limiter)
+            result = claude_relay.rate_limiter.get_rate_limit_for_endpoint("general")
             assert result == "30/minute"
 
     def test_custom_rate_limit_from_env(self):
         """Rate limit can be customized via environment variable."""
         import importlib
-        import src.rate_limiter
+        import claude_relay.rate_limiter
 
         with patch.dict(os.environ, {"RATE_LIMIT_CHAT_PER_MINUTE": "50"}):
-            importlib.reload(src.rate_limiter)
-            result = src.rate_limiter.get_rate_limit_for_endpoint("chat")
+            importlib.reload(claude_relay.rate_limiter)
+            result = claude_relay.rate_limiter.get_rate_limit_for_endpoint("chat")
             assert result == "50/minute"
 
     def test_unknown_endpoint_uses_general_default(self):
         """Unknown endpoint uses general rate limit."""
         import importlib
-        import src.rate_limiter
+        import claude_relay.rate_limiter
 
         env_copy = {k: v for k, v in os.environ.items() if k != "RATE_LIMIT_PER_MINUTE"}
         with patch.dict(os.environ, env_copy, clear=True):
-            importlib.reload(src.rate_limiter)
-            result = src.rate_limiter.get_rate_limit_for_endpoint("unknown_endpoint")
+            importlib.reload(claude_relay.rate_limiter)
+            result = claude_relay.rate_limiter.get_rate_limit_for_endpoint("unknown_endpoint")
             assert result == "30/minute"
 
 
@@ -235,14 +235,14 @@ class TestRateLimitEndpointDecorator:
 
     def test_decorator_returns_function(self):
         """Decorator returns a function."""
-        from src.rate_limiter import rate_limit_endpoint
+        from claude_relay.rate_limiter import rate_limit_endpoint
 
         decorator = rate_limit_endpoint("chat")
         assert callable(decorator)
 
     def test_decorator_wraps_function_with_request(self):
         """Decorated function with request parameter can still be called."""
-        from src.rate_limiter import rate_limit_endpoint
+        from claude_relay.rate_limiter import rate_limit_endpoint
 
         # slowapi requires a 'request' parameter on decorated functions
         @rate_limit_endpoint("chat")
@@ -255,13 +255,13 @@ class TestRateLimitEndpointDecorator:
     def test_decorator_without_limiter(self):
         """When limiter is None, returns original function unchanged."""
         import importlib
-        import src.rate_limiter
+        import claude_relay.rate_limiter
 
         # Disable rate limiting
         with patch.dict(os.environ, {"RATE_LIMIT_ENABLED": "false"}):
-            importlib.reload(src.rate_limiter)
+            importlib.reload(claude_relay.rate_limiter)
 
-            @src.rate_limiter.rate_limit_endpoint("chat")
+            @claude_relay.rate_limiter.rate_limit_endpoint("chat")
             def my_endpoint():
                 return "hello"
 
@@ -276,8 +276,8 @@ def reset_rate_limiter_module():
     yield
     # Clean up after test
     import importlib
-    import src.rate_limiter
+    import claude_relay.rate_limiter
 
     # Reset to default state
     with patch.dict(os.environ, {"RATE_LIMIT_ENABLED": "true"}, clear=False):
-        importlib.reload(src.rate_limiter)
+        importlib.reload(claude_relay.rate_limiter)

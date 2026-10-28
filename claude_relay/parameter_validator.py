@@ -4,8 +4,8 @@ Parameter validation and mapping utilities for OpenAI to Claude Code SDK convers
 
 import logging
 from typing import Dict, Any, List, Optional
-from src.models import ChatCompletionRequest
-from src.constants import CLAUDE_MODELS
+from claude_relay.models import ChatCompletionRequest
+from claude_relay.constants import CLAUDE_MODELS
 
 logger = logging.getLogger(__name__)
 

@@ -5,16 +5,16 @@ Single source of truth for tool names, models, and other configuration values.
 
 Usage Examples:
     # Check if a model is supported
-    from src.constants import CLAUDE_MODELS
+    from claude_relay.constants import CLAUDE_MODELS
     if model_name in CLAUDE_MODELS:
         # proceed with request
 
     # Get default allowed tools
-    from src.constants import DEFAULT_ALLOWED_TOOLS
+    from claude_relay.constants import DEFAULT_ALLOWED_TOOLS
     options = {"allowed_tools": DEFAULT_ALLOWED_TOOLS}
 
     # Use rate limits in FastAPI
-    from src.constants import RATE_LIMIT_CHAT
+    from claude_relay.constants import RATE_LIMIT_CHAT
     @limiter.limit(f"{RATE_LIMIT_CHAT}/minute")
     async def chat_endpoint(): ...
 

@@ -1,6 +1,6 @@
 [tool.poetry]
-name = "claude-relay"
-version = "2.3.0"
+name = "claude-relay-server"
+version = "3.0.0"
 description = "Claude Code API server: OpenAI- and Anthropic-compatible endpoints for Claude Code, using your Claude subscription"
 authors = ["A Anandha Krishnan <creattech2000@gmail.com>"]
 readme = "README.md"
@@ -11,13 +11,14 @@ documentation = "https://github.com/anandhakrishnanaji/claude-relay#readme"
 keywords = ["claude", "claude-code", "claude-code-api", "openai-compatible", "anthropic", "llm-proxy", "api-server", "fastapi", "claude-agent-sdk"]
 classifiers = [
     "Development Status :: 5 - Production/Stable",
+    "Environment :: Console",
     "Framework :: FastAPI",
     "Intended Audience :: Developers",
     "Programming Language :: Python :: 3",
     "Topic :: Internet :: WWW/HTTP :: HTTP Servers",
     "Topic :: Scientific/Engineering :: Artificial Intelligence",
 ]
-packages = [{include = "src"}]
+packages = [{include = "claude_relay"}]
 
 [tool.poetry.dependencies]
 python = "^3.10"
@@ -52,4 +53,5 @@ line-length = 100
 target-version = ['py310']
 
 [tool.poetry.scripts]
-claude-wrapper = "src.main:run_server"
+claude-relay = "claude_relay.cli:main"
+claude-relay-server = "claude_relay.cli:main"

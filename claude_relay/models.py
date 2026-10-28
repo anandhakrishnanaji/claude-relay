@@ -12,7 +12,7 @@ logger = logging.getLogger(__name__)
 # latest Sonnet (set at startup by main.resolve_default_model), falling back
 # to the static constant when resolution hasn't happened yet.
 def get_default_model():
-    from src import constants
+    from claude_relay import constants
 
     if constants.DEFAULT_MODEL_ENV:
         return constants.DEFAULT_MODEL_ENV

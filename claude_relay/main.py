@@ -2,8 +2,6 @@ import os
 import json
 import asyncio
 import logging
-import secrets
-import string
 import time
 import uuid
 from typing import Optional, AsyncGenerator, Dict, Any, List
@@ -18,7 +16,7 @@ from pydantic import ValidationError
 import httpx
 from dotenv import load_dotenv
 
-from src.models import (
+from claude_relay.models import (
     ChatCompletionRequest,
     ChatCompletionResponse,
     ChatCompletionStreamResponse,
@@ -41,22 +39,27 @@ from src.models import (
     AnthropicTextBlock,
     AnthropicUsage,
 )
-from src.claude_cli import ClaudeCodeCLI
-from src.message_adapter import MessageAdapter
-from src.auth import verify_api_key, security, validate_claude_code_auth, get_claude_code_auth_info
-from src.parameter_validator import ParameterValidator, CompatibilityReporter
-from src.session_manager import session_manager
-from src.tool_manager import tool_manager
-from src.mcp_client import mcp_client, MCPServerConfig
-from src.rate_limiter import (
+from claude_relay.claude_cli import ClaudeCodeCLI
+from claude_relay.message_adapter import MessageAdapter
+from claude_relay.auth import (
+    verify_api_key,
+    security,
+    validate_claude_code_auth,
+    get_claude_code_auth_info,
+)
+from claude_relay.parameter_validator import ParameterValidator, CompatibilityReporter
+from claude_relay.session_manager import session_manager
+from claude_relay.tool_manager import tool_manager
+from claude_relay.mcp_client import mcp_client, MCPServerConfig
+from claude_relay.rate_limiter import (
     limiter,
     rate_limit_exceeded_handler,
     rate_limit_endpoint,
 )
 from datetime import datetime, timezone
 
-from src import constants
-from src.constants import (
+from claude_relay import constants
+from claude_relay.constants import (
     ANTHROPIC_MODELS_URL,
     ANTHROPIC_VERSION,
     CLAUDE_MODELS,
@@ -79,9 +82,6 @@ VERBOSE = os.getenv("VERBOSE", "false").lower() in ("true", "1", "yes", "on")
 log_level = logging.DEBUG if (DEBUG_MODE or VERBOSE) else logging.INFO
 logging.basicConfig(level=log_level, format="%(asctime)s - %(name)s - %(levelname)s - %(message)s")
 logger = logging.getLogger(__name__)
-
-# Global variable to store runtime-generated API key
-runtime_api_key = None
 
 # Best-effort cache for Anthropic's live Models API.  The static constants remain
 # the fallback so /v1/models keeps working for Claude CLI, Bedrock, Vertex, local
@@ -262,59 +262,6 @@ async def resolve_default_model() -> Optional[str]:
     return None
 
 
-def generate_secure_token(length: int = 32) -> str:
-    """Generate a secure random token for API authentication."""
-    alphabet = string.ascii_letters + string.digits + "-_"
-    return "".join(secrets.choice(alphabet) for _ in range(length))
-
-
-def prompt_for_api_protection() -> Optional[str]:
-    """
-    Interactively ask user if they want API key protection.
-    Returns the generated token if user chooses protection, None otherwise.
-    """
-    # Don't prompt if API_KEY is already set via environment variable
-    if os.getenv("API_KEY"):
-        return None
-
-    print("\n" + "=" * 60)
-    print("🔐 API Endpoint Security Configuration")
-    print("=" * 60)
-    print("Would you like to protect your API endpoint with an API key?")
-    print("This adds a security layer when accessing your server remotely.")
-    print("")
-
-    while True:
-        try:
-            choice = input("Enable API key protection? (y/N): ").strip().lower()
-
-            if choice in ["", "n", "no"]:
-                print("✅ API endpoint will be accessible without authentication")
-                print("=" * 60)
-                return None
-
-            elif choice in ["y", "yes"]:
-                token = generate_secure_token()
-                print("")
-                print("🔑 API Key Generated!")
-                print("=" * 60)
-                print(f"API Key: {token}")
-                print("=" * 60)
-                print("📋 IMPORTANT: Save this key - you'll need it for API calls!")
-                print("   Example usage:")
-                print(f'   curl -H "Authorization: Bearer {token}" \\')
-                print("        http://localhost:8000/v1/models")
-                print("=" * 60)
-                return token
-
-            else:
-                print("Please enter 'y' for yes or 'n' for no (or press Enter for no)")
-
-        except (EOFError, KeyboardInterrupt):
-            print("\n✅ Defaulting to no authentication")
-            return None
-
-
 # Initialize Claude CLI
 claude_cli = ClaudeCodeCLI(
     timeout=int(os.getenv("MAX_TIMEOUT", "600000")), cwd=os.getenv("CLAUDE_CWD")
@@ -377,9 +324,7 @@ async def lifespan(app: FastAPI):
         logger.debug("   POST /v1/debug/request - Debug request validation")
         logger.debug("   GET  /v1/auth/status - Authentication status")
         logger.debug("   GET  /health - Health check")
-        logger.debug(
-            f"🔧 API Key protection: {'Enabled' if (os.getenv('API_KEY') or runtime_api_key) else 'Disabled'}"
-        )
+        logger.debug(f"🔧 API Key protection: {'Enabled' if os.getenv('API_KEY') else 'Disabled'}")
 
     # Resolve the default model from the live Anthropic Models API so /v1/chat
     # uses the latest Sonnet without a code change. Best-effort: any failure
@@ -1118,7 +1063,7 @@ async def health_check(request: Request):
 @rate_limit_endpoint("health")
 async def version_info(request: Request):
     """Version information endpoint."""
-    from src import __version__
+    from claude_relay import __version__
 
     return {
         "version": __version__,
@@ -1130,7 +1075,7 @@ async def version_info(request: Request):
 @app.get("/", response_class=HTMLResponse)
 async def root():
     """Landing page with API documentation."""
-    from src import __version__
+    from claude_relay import __version__
 
     auth_info = get_claude_code_auth_info()
     auth_method = auth_info.get("method", "unknown")
@@ -1806,7 +1751,7 @@ async def debug_request_validation(request: Request):
 @rate_limit_endpoint("auth")
 async def get_auth_status(request: Request):
     """Get Claude Code authentication status."""
-    from src.auth import auth_manager
+    from claude_relay.auth import auth_manager
 
     auth_info = get_claude_code_auth_info()
     active_api_key = auth_manager.get_api_key()
@@ -1815,11 +1760,7 @@ async def get_auth_status(request: Request):
         "claude_code_auth": auth_info,
         "server_info": {
             "api_key_required": bool(active_api_key),
-            "api_key_source": (
-                "environment"
-                if os.getenv("API_KEY")
-                else ("runtime" if runtime_api_key else "none")
-            ),
+            "api_key_source": "environment" if os.getenv("API_KEY") else "none",
             "version": "1.0.0",
         },
     }
@@ -2121,76 +2062,7 @@ async def http_exception_handler(request: Request, exc: HTTPException):
     )
 
 
-def find_available_port(start_port: int = 8000, max_attempts: int = 10) -> int:
-    """Find an available port starting from start_port."""
-    import socket
-
-    for port in range(start_port, start_port + max_attempts):
-        sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-        sock.settimeout(1)
-        try:
-            result = sock.connect_ex(("127.0.0.1", port))
-            if result != 0:  # Port is available
-                return port
-        except Exception:
-            return port
-        finally:
-            sock.close()
-
-    raise RuntimeError(
-        f"No available ports found in range {start_port}-{start_port + max_attempts - 1}"
-    )
-
-
-def run_server(port: int = None, host: str = None):
-    """Run the server - used as Poetry script entry point."""
-    import uvicorn
-
-    # Handle interactive API key protection
-    global runtime_api_key
-    runtime_api_key = prompt_for_api_protection()
-
-    # Priority: CLI arg > ENV var > default
-    if port is None:
-        port = int(os.getenv("PORT", "8000"))
-    if host is None:
-        # Default to 0.0.0.0 for container/development use (configurable via CLAUDE_WRAPPER_HOST env)
-        host = os.getenv("CLAUDE_WRAPPER_HOST", "0.0.0.0")  # nosec B104
-    preferred_port = port
-
-    try:
-        # Try the preferred port first
-        # Binding to 0.0.0.0 is intentional for container/development use
-        uvicorn.run(app, host=host, port=preferred_port)  # nosec B104
-    except OSError as e:
-        if "Address already in use" in str(e) or e.errno == 48:
-            logger.warning(f"Port {preferred_port} is already in use. Finding alternative port...")
-            try:
-                available_port = find_available_port(preferred_port + 1)
-                logger.info(f"Starting server on alternative port {available_port}")
-                print(f"\n🚀 Server starting on http://localhost:{available_port}")
-                print(f"📝 Update your client base_url to: http://localhost:{available_port}/v1")
-                # Binding to 0.0.0.0 is intentional for container/development use
-                uvicorn.run(app, host=host, port=available_port)  # nosec B104
-            except RuntimeError as port_error:
-                logger.error(f"Could not find available port: {port_error}")
-                print(f"\n❌ Error: {port_error}")
-                print("💡 Try setting a specific port with: PORT=9000 poetry run python main.py")
-                raise
-        else:
-            raise
-
-
 if __name__ == "__main__":
-    import sys
+    from claude_relay.cli import main
 
-    # Simple CLI argument parsing for port
-    port = None
-    if len(sys.argv) > 1:
-        try:
-            port = int(sys.argv[1])
-            print(f"Using port from command line: {port}")
-        except ValueError:
-            print(f"Invalid port number: {sys.argv[1]}. Using default.")
-
-    run_server(port)
+    main()

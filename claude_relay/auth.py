@@ -18,17 +18,7 @@ class ClaudeCodeAuthManager:
         self.auth_status = self._validate_auth_method()
 
     def get_api_key(self):
-        """Get the active API key (environment or runtime-generated)."""
-        # Try to import runtime_api_key from main module
-        try:
-            from src import main
-
-            if hasattr(main, "runtime_api_key") and main.runtime_api_key:
-                return main.runtime_api_key
-        except ImportError:
-            pass
-
-        # Fall back to environment variable
+        """Get the API key clients must send, if one is configured."""
         return self.env_api_key
 
     def _detect_auth_method(self) -> str:

@@ -13,7 +13,7 @@ import shutil
 # Add parent directory to path for imports
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from src.claude_cli import ClaudeCodeCLI
+from claude_relay.claude_cli import ClaudeCodeCLI
 
 
 def test_default_temp_directory():

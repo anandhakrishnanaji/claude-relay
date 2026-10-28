@@ -1,5 +1,5 @@
 from typing import List, Optional, Dict, Any
-from src.models import Message
+from claude_relay.models import Message
 import re
 
 

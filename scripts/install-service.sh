@@ -63,7 +63,7 @@ Type=simple
 WorkingDirectory=$REPO
 EnvironmentFile=$REPO/.env
 Environment=PATH=$HOME/.local/bin:/usr/local/bin:/usr/bin:/bin
-ExecStart=$REPO/.venv/bin/uvicorn src.main:app --host $HOST --port $PORT
+ExecStart=$REPO/.venv/bin/claude-relay --host $HOST --port $PORT
 Restart=always
 RestartSec=5
 

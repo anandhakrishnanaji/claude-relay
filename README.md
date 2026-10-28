@@ -26,7 +26,14 @@ reply = client.chat.completions.create(
 print(reply.choices[0].message.content)
 ```
 
-**Install:** see [INSTALL.md](./INSTALL.md) for local, always-on, Docker and tailnet setups.
+**Run it:**
+
+```bash
+claude auth login          # or: export ANTHROPIC_API_KEY=...
+uvx claude-relay-server    # serves http://localhost:8000/v1
+```
+
+See [INSTALL.md](./INSTALL.md) for pipx/pip, an always-on service and Docker.
 
 ## Highlights
 
@@ -35,7 +42,7 @@ print(reply.choices[0].message.content)
 - **Tools off by default.** Both endpoints run a single turn without tools, so untrusted text in a prompt can't run commands. Send `"enable_tools": true` to give Claude its Bash/Read/Write tools.
 - **Isolated from host settings.** Requests don't load the host's `~/.claude/CLAUDE.md`, settings, skills or plugins. Set `CLAUDE_SETTING_SOURCES=user,project,local` to opt back in.
 - **Flexible auth.** Claude CLI login (subscription), `ANTHROPIC_API_KEY`, AWS Bedrock or Google Vertex AI, auto-detected.
-- **Ships deploy tooling.** `scripts/install-service.sh` sets up an always-on systemd user service, and `deploy/` has a Docker + [tsdproxy](https://github.com/almeidapaulopt/tsdproxy) setup for serving it on your tailnet. See [Always-on local service](#always-on-local-service-linux-systemd) and [Home server on your tailnet](#home-server-on-your-tailnet-docker--tsdproxy).
+- **Ships deploy tooling.** `scripts/install-service.sh` sets up an always-on systemd user service, and `deploy/Dockerfile` is a non-root production image. See [Always-on local service](#always-on-local-service-linux-systemd) and [Docker](#docker).
 
 ## What is claude-relay for?
 
@@ -43,23 +50,26 @@ claude-relay is for developers who want to call Claude Code from tools and code 
 
 - Using an existing **OpenAI Python or JavaScript SDK** app with Claude, with only a base-URL change.
 - Connecting **chat UIs, editors and agent frameworks** that accept a custom OpenAI-compatible endpoint.
-- Sharing one **Claude Code login across machines** on a home server or tailnet.
 - Scripting Claude Code over **plain HTTP/curl** instead of the CLI.
 
 It runs on the official [Claude Agent SDK](https://pypi.org/project/claude-agent-sdk/), which bundles the Claude Code CLI, so no separate Node.js install is needed.
 
 ## Version
 
-**Current Version:** 2.3.0
+**Current Version:** 3.0.0
+- **Published on PyPI** as `claude-relay-server`: run it with `uvx claude-relay-server`, or install the `claude-relay` command with `uv tool install` / `pipx install`
+- **New `claude-relay` command** with `--host`, `--port`, `--api-key`, `--generate-api-key` and `--env-file`
+- **Binds to `127.0.0.1` by default**, and warns if you expose it without an API key
+- **No startup prompt**: the interactive "Enable API key protection?" question is gone, so it runs cleanly from scripts and services
+- **Docker image** at `ghcr.io/anandhakrishnanaji/claude-relay`
+
+**Upgrading from 2.x:** the Python package moved from `src` to `claude_relay`. Replace `uvicorn src.main:app` with `claude-relay` (or `uvicorn claude_relay.main:app`). If you used the systemd service, rerun `./scripts/install-service.sh`. If you relied on the server listening on all interfaces, pass `--host 0.0.0.0` and set an API key.
+
+**2.3.0:**
 - **Live `/v1/models` discovery:** When `ANTHROPIC_API_KEY` is set, the wrapper fetches Anthropic's live model list (cached) instead of serving the static fallback
 - **Dynamic default Sonnet:** `DEFAULT_MODEL` resolves to the latest Sonnet at startup when `ANTHROPIC_API_KEY` is configured; falls back to `claude-sonnet-4-6` otherwise
 - **Operator overrides:** New `CLAUDE_MODELS_OVERRIDE`, `FAST_MODEL`, and `MODEL_LIST_*` env vars
 - **Updated catalog:** Claude 4.6 family added to the static fallback list
-
-**Upgrading from v1.x?**
-1. Pull latest code: `git pull origin main`
-2. Update dependencies: `poetry install`
-3. Restart server - that's it!
 
 **Migration Resources:**
 - [docs/MIGRATION_STATUS.md](./docs/MIGRATION_STATUS.md) - Detailed v2.0.0 migration status
@@ -93,8 +103,7 @@ It runs on the official [Claude Agent SDK](https://pypi.org/project/claude-agent
 - **System prompt support** via SDK options
 - **Optional tool usage** - Enable Claude Code tools (Read, Write, Bash, etc.) when needed
 - **Fast default mode** - Tools disabled by default for OpenAI API compatibility
-- **Development mode** with auto-reload (`uvicorn --reload`)
-- **Interactive API key protection** - Optional security with auto-generated tokens
+- **Optional API key protection** - `--api-key` or `--generate-api-key`
 - **Comprehensive logging** and debugging capabilities
 
 ### 🌐 **Interactive Landing Page**
@@ -106,74 +115,44 @@ It runs on the official [Claude Agent SDK](https://pypi.org/project/claude-agent
 
 ## Quick Start
 
-Get started in under 2 minutes:
+You need Python 3.10+ (uv fetches it for you) and credentials for Claude:
+
+- a Claude subscription: install the [Claude Code CLI](https://docs.anthropic.com/en/docs/claude-code) and run `claude auth login`, or
+- an Anthropic API key in `ANTHROPIC_API_KEY`, or
+- AWS Bedrock / Google Vertex AI (see [Configuration](#configuration)).
 
 ```bash
-# 1. Clone and setup the wrapper
-git clone https://github.com/anandhakrishnanaji/claude-relay
-cd claude-relay
-poetry install  # Installs SDK with bundled Claude Code CLI
-
-# 2. Authenticate (choose one method)
-export ANTHROPIC_API_KEY=your-api-key  # Recommended
-# OR use CLI auth: claude auth login
-
-# 3. Start the server
-poetry run uvicorn src.main:app --reload --port 8000
-
-# 4. Test it works
-poetry run python tests/test_endpoints.py
+uvx claude-relay-server
 ```
 
-🎉 **That's it!** Your OpenAI-compatible Claude Code API is running on `http://localhost:8000`
+That downloads and starts the server on `http://localhost:8000`. Point your client at `http://localhost:8000/v1` (OpenAI) or `http://localhost:8000` (Anthropic) and stop it with Ctrl+C when you're done.
 
-## Prerequisites
-
-1. **Python 3.10+**: Required for the server (supports Python 3.10, 3.11, 3.12, 3.13)
-
-2. **Poetry**: For dependency management
-   ```bash
-   # Install Poetry (if not already installed)
-   curl -sSL https://install.python-poetry.org | python3 -
-   ```
-
-3. **Authentication**: Choose one method:
-   - **Option A**: Set environment variable (Recommended)
-     ```bash
-     export ANTHROPIC_API_KEY=your-api-key
-     ```
-   - **Option B**: Authenticate via CLI
-     ```bash
-     claude auth login
-     ```
-   - **Option C**: Use AWS Bedrock or Google Vertex AI (see Configuration section)
-
-> **Note:** The Claude Code CLI is bundled with the Claude Agent SDK. No separate Node.js or npm installation required!
+> **Note:** The Claude Code CLI is bundled with the Claude Agent SDK, so Node.js is only needed if you want the standalone CLI for `claude auth login`.
 
 ## Installation
 
-1. Clone the repository:
-   ```bash
-   git clone https://github.com/anandhakrishnanaji/claude-relay
-   cd claude-relay
-   ```
+To keep the `claude-relay` command installed instead of using `uvx`:
 
-2. Install dependencies with Poetry:
-   ```bash
-   poetry install
-   ```
+```bash
+uv tool install claude-relay-server   # or: pipx install claude-relay-server
+claude-relay                          # start it
+uv tool upgrade claude-relay-server   # later, to update
+```
 
-   This will create a virtual environment and install all dependencies.
+`pip install claude-relay-server` into a virtualenv works too.
 
-3. Configure environment:
-   ```bash
-   cp .env.example .env
-   # Edit .env with your preferences
-   ```
+**From source** (to work on claude-relay itself):
+
+```bash
+git clone https://github.com/anandhakrishnanaji/claude-relay
+cd claude-relay
+uv venv .venv && uv pip install --python .venv/bin/python -e .
+.venv/bin/uvicorn claude_relay.main:app --reload --port 8000   # auto-reloads on code changes
+```
 
 ## Configuration
 
-Edit the `.env` file:
+Settings come from command-line flags, then environment variables, then a `.env` file in the directory you run `claude-relay` from (or the file given with `--env-file`). See [.env.example](./.env.example) for every option. The common ones:
 
 ```env
 # Claude CLI path (usually just "claude")
@@ -184,11 +163,11 @@ CLAUDE_CLI_PATH=claude
 # If not set, auto-detects based on available credentials
 # CLAUDE_AUTH_METHOD=cli
 
-# Optional API key for client authentication
-# If not set, server will prompt for interactive API key protection on startup
+# Optional API key clients must send as "Authorization: Bearer <key>"
 # API_KEY=your-optional-api-key
 
-# Server port
+# Interface and port (same as --host / --port)
+CLAUDE_WRAPPER_HOST=127.0.0.1
 PORT=8000
 
 # Timeout in milliseconds
@@ -211,13 +190,13 @@ By default, Claude Code runs in an **isolated temporary directory** to prevent i
 1. **Default (Recommended)**: Automatically creates a temporary isolated workspace
    ```bash
    # No configuration needed - secure by default
-   poetry run python main.py
+   claude-relay
    ```
 
 2. **Custom Directory**: Set a specific workspace directory
    ```bash
    export CLAUDE_CWD=/path/to/your/project
-   poetry run python main.py
+   claude-relay
    ```
 
 3. **Via .env file**: Add to your `.env` file
@@ -232,42 +211,18 @@ By default, Claude Code runs in an **isolated temporary directory** to prevent i
 
 ### 🔐 **API Security Configuration**
 
-The server supports **interactive API key protection** for secure remote access:
+By default the server listens on `127.0.0.1` with no API key, which is what you want for local development: only programs on your machine can reach it.
 
-1. **No API key set**: Server prompts "Enable API key protection? (y/N)" on startup
-   - Choose **No** (default): Server runs without authentication
-   - Choose **Yes**: Server generates and displays a secure API key
-
-2. **Environment API key set**: Uses the configured `API_KEY` without prompting
+To require a key, pass one or let claude-relay generate one:
 
 ```bash
-# Example: Interactive protection enabled
-poetry run python main.py
-
-# Output:
-# ============================================================
-# 🔐 API Endpoint Security Configuration
-# ============================================================
-# Would you like to protect your API endpoint with an API key?
-# This adds a security layer when accessing your server remotely.
-# 
-# Enable API key protection? (y/N): y
-# 
-# 🔑 API Key Generated!
-# ============================================================
-# API Key: Xf8k2mN9-vLp3qR5_zA7bW1cE4dY6sT0uI
-# ============================================================
-# 📋 IMPORTANT: Save this key - you'll need it for API calls!
-#    Example usage:
-#    curl -H "Authorization: Bearer Xf8k2mN9-vLp3qR5_zA7bW1cE4dY6sT0uI" \
-#         http://localhost:8000/v1/models
-# ============================================================
+claude-relay --api-key my-secret          # or set API_KEY in the environment / .env
+claude-relay --generate-api-key           # prints a random key for this run
 ```
 
-**Perfect for:**
-- 🏠 **Local development** - No authentication needed
-- 🌐 **Remote access** - Secure with generated tokens
-- 🔒 **VPN/Tailscale** - Add security layer for remote endpoints
+Clients then send `Authorization: Bearer <key>` (with the OpenAI SDK, pass it as `api_key`).
+
+If you listen on another interface (`--host 0.0.0.0`), set an API key. claude-relay warns at startup if you don't, because anyone who can reach the port can use your Claude account.
 
 ### 🛡️ **Rate Limiting**
 
@@ -303,29 +258,23 @@ RATE_LIMIT_HEALTH_PER_MINUTE=30
 
 ## Running the Server
 
-1. Verify Claude Code is installed and working:
-   ```bash
-   claude --version
-   claude --print --model claude-haiku-4-5-20251001 "Hello"  # Test with fastest model
-   ```
+```bash
+claude-relay                              # http://localhost:8000
+claude-relay --port 9000                  # another port
+claude-relay --host 0.0.0.0 --api-key KEY # reachable from your network
+claude-relay --env-file ~/claude-relay.env
+claude-relay --debug                      # verbose logging
+claude-relay --help
+```
 
-2. Start the server:
+`python -m claude_relay` runs the same command. If the port is taken, claude-relay exits with an error instead of silently picking another port, so your clients' base URL stays correct.
 
-   **Development mode (recommended - auto-reloads on changes):**
-   ```bash
-   poetry run uvicorn src.main:app --reload --port 8000
-   ```
+To check your Claude credentials before starting:
 
-   **Production mode:**
-   ```bash
-   poetry run python main.py
-   ```
-
-   **Port Options for production mode:**
-   - Default: Uses port 8000 (or PORT from .env)
-   - If port is in use, automatically finds next available port
-   - Specify custom port: `poetry run python main.py 9000`
-   - Set in environment: `PORT=9000 poetry run python main.py`
+```bash
+claude --version
+claude --print --model claude-haiku-4-5-20251001 "Hello"
+```
 
 ### Always-on local service (Linux, systemd)
 
@@ -364,88 +313,32 @@ PORT=9000 ./scripts/install-service.sh     # reinstall on another port (delete .
 
 After a `git pull` that changes dependencies, rerun `./scripts/install-service.sh`. If your Claude login expires, run `claude auth login` and restart the service.
 
-### Home server on your tailnet (Docker + tsdproxy)
-
-To reach the wrapper from all your devices, run it on a server behind [tsdproxy](https://github.com/almeidapaulopt/tsdproxy). It becomes `https://claude.<your-tailnet>.ts.net/v1`, with HTTPS, and only devices on your tailnet can reach it.
-
-**Requirements on the server:** Docker, a running tsdproxy on an external `proxy` network with a **valid** Tailscale auth key, and a Claude login in `~/.claude` (`claude auth login`). The container runs as uid 1000 and mounts `~/.claude` read-write so the CLI can refresh its token.
-
-```bash
-# From your machine: copy the app and compose file to the server
-ssh server 'mkdir -p ~/docker/claude-wrapper/app'
-rsync -a pyproject.toml README.md src deploy server:docker/claude-wrapper/app/
-scp deploy/tsdproxy/compose.yml server:docker/claude-wrapper/compose.yml
-
-# On the server
-cd ~/docker/claude-wrapper && docker compose up -d --build
-```
-
-Funnel is deliberately left off so your subscription isn't exposed to the public internet. Uncomment `API_KEY` in the compose file if you want clients to send a bearer token too.
-
-> **Check the tsdproxy auth key first.** Existing proxies keep working after the key expires (Tailscale keys last at most 90 days), but adding a new proxy makes tsdproxy register a new node. With an expired key, tsdproxy 1.4.7 crashes and takes **every** proxy down. Generate a fresh key in the Tailscale admin console before deploying.
-
 ## Docker
 
-Build and run the wrapper in a Docker container.
-
-### Build
+Each release publishes a multi-arch image (amd64, arm64) to GHCR. It runs as a non-root user (uid 1000), which the Claude CLI requires when tools are enabled.
 
 ```bash
-docker build -t claude-wrapper:latest .
+docker run -d --name claude-relay --restart unless-stopped \
+  -p 127.0.0.1:8000:8000 \
+  -v ~/.claude:/home/app/.claude \
+  -e CLAUDE_CONFIG_DIR=/home/app/.claude \
+  ghcr.io/anandhakrishnanaji/claude-relay:latest
 ```
 
-### Run
+- The `~/.claude` mount is read-write so the CLI can refresh its login token. To use an API key instead, drop the mount and pass `-e ANTHROPIC_API_KEY=...`.
+- If your uid isn't 1000, build the image yourself: `docker build -f deploy/Dockerfile --build-arg UID=$(id -u) --build-arg GID=$(id -g) -t claude-relay .`
+- To give Claude a workspace, add `-v /path/to/project:/workspace -e CLAUDE_CWD=/workspace`.
+- `-p 127.0.0.1:8000:8000` keeps it local. If you publish the port more widely, add `-e API_KEY=...`.
 
-**Production:**
-```bash
-docker run -d -p 8000:8000 \
-  -v ~/.claude:/root/.claude \
-  --name claude-wrapper \
-  claude-wrapper:latest
-```
-
-**With custom workspace:**
-```bash
-docker run -d -p 8000:8000 \
-  -v ~/.claude:/root/.claude \
-  -v /path/to/project:/workspace \
-  -e CLAUDE_CWD=/workspace \
-  claude-wrapper:latest
-```
-
-**Development (hot reload):**
-```bash
-docker run -d -p 8000:8000 \
-  -v ~/.claude:/root/.claude \
-  -v $(pwd):/app \
-  claude-wrapper:latest \
-  poetry run uvicorn src.main:app --host 0.0.0.0 --port 8000 --reload
-```
-
-### Docker Compose
-
-```yaml
-version: '3.8'
-services:
-  claude-wrapper:
-    build: .
-    ports:
-      - "8000:8000"
-    volumes:
-      - ~/.claude:/root/.claude
-    environment:
-      - PORT=8000
-      - MAX_TIMEOUT=600
-    restart: unless-stopped
-```
-
-Run: `docker-compose up -d` | Stop: `docker-compose down`
+The `Dockerfile` in the repo root is a development image (runs as root with auto-reload) that the included `docker-compose.yml` builds. Use `deploy/Dockerfile` for anything long-running.
 
 ### Environment Variables
 
 | Variable | Description | Default |
 |----------|-------------|---------|
-| `PORT` | Server port | `8000` |
+| `CLAUDE_WRAPPER_HOST` | Interface to bind (`--host`) | `127.0.0.1` (`0.0.0.0` in the Docker image) |
+| `PORT` | Server port (`--port`) | `8000` |
+| `API_KEY` | Key clients must send as a bearer token (`--api-key`) | - |
 | `MAX_TIMEOUT` | Request timeout (seconds) | `300` |
 | `CLAUDE_CWD` | Working directory | temp dir |
 | `CLAUDE_SETTING_SOURCES` | Comma-separated filesystem settings the CLI loads per request (`user`, `project`, `local`). Empty isolates requests from the host's `~/.claude/CLAUDE.md`, settings, skills and plugins. | empty |
@@ -462,10 +355,10 @@ Run: `docker-compose up -d` | Stop: `docker-compose down`
 ### Management
 
 ```bash
-docker logs -f claude-wrapper        # View logs
-docker stop claude-wrapper           # Stop
-docker start claude-wrapper          # Start
-docker rm claude-wrapper             # Remove
+docker logs -f claude-relay        # View logs
+docker stop claude-relay           # Stop
+docker start claude-relay          # Start
+docker rm claude-relay             # Remove
 ```
 
 ### Test
@@ -794,7 +687,7 @@ No. OpenAI-style `tools`/function calling is not mapped. Claude Code's own tools
 Any model Claude Code accepts, such as `claude-sonnet-4-6`, `claude-opus-4-6` and `claude-haiku-4-5-20251001`. With `ANTHROPIC_API_KEY` set, `/v1/models` returns Anthropic's live list. See [Supported Models](#supported-models).
 
 ### Is it safe to expose on a network?
-Set `API_KEY` so clients must send a bearer token, keep tools off unless you need them, and prefer a private network such as a tailnet. See [API Security Configuration](#-api-security-configuration).
+Set `API_KEY` so clients must send a bearer token, keep tools off unless you need them, and keep it on a private network. See [API Security Configuration](#-api-security-configuration).
 
 ### How is this different from calling the Anthropic API directly?
 Requests go through Claude Code, so you can use a Claude subscription login instead of per-token API billing, and optionally give Claude its coding tools. If you already have an API key and don't need Claude Code, the Anthropic API is simpler.

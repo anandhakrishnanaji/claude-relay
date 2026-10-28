@@ -12,7 +12,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends curl \
 
 WORKDIR /app
 COPY pyproject.toml README.md ./
-COPY src ./src
+COPY claude_relay ./claude_relay
 RUN uv pip install --system --no-cache .
 
 USER app
@@ -25,4 +25,4 @@ EXPOSE 8000
 HEALTHCHECK --interval=30s --timeout=5s --retries=3 \
     CMD curl -fs http://localhost:8000/health || exit 1
 
-CMD ["sh", "-c", "uvicorn src.main:app --host 0.0.0.0 --port ${PORT}"]
+CMD ["claude-relay"]

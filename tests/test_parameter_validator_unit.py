@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Unit tests for src/parameter_validator.py
+Unit tests for claude_relay/parameter_validator.py
 
 Tests the ParameterValidator and CompatibilityReporter classes.
 These are pure unit tests that don't require a running server.
@@ -9,8 +9,8 @@ These are pure unit tests that don't require a running server.
 import pytest
 from unittest.mock import MagicMock, patch
 
-from src.parameter_validator import ParameterValidator, CompatibilityReporter
-from src.models import Message, ChatCompletionRequest
+from claude_relay.parameter_validator import ParameterValidator, CompatibilityReporter
+from claude_relay.models import Message, ChatCompletionRequest
 
 
 class TestParameterValidatorValidateModel:
@@ -23,7 +23,7 @@ class TestParameterValidatorValidateModel:
 
     def test_unknown_model_returns_true_with_warning(self):
         """Unknown model returns True (graceful degradation) with warning logged."""
-        with patch("src.parameter_validator.logger") as mock_logger:
+        with patch("claude_relay.parameter_validator.logger") as mock_logger:
             result = ParameterValidator.validate_model("unknown-model-xyz")
             assert result is True
             mock_logger.warning.assert_called_once()
@@ -52,7 +52,7 @@ class TestParameterValidatorValidatePermissionMode:
 
     def test_invalid_permission_mode_returns_false(self):
         """Invalid permission mode returns False with error logged."""
-        with patch("src.parameter_validator.logger") as mock_logger:
+        with patch("claude_relay.parameter_validator.logger") as mock_logger:
             result = ParameterValidator.validate_permission_mode("invalidMode")
             assert result is False
             mock_logger.error.assert_called_once()
@@ -69,21 +69,21 @@ class TestParameterValidatorValidateTools:
 
     def test_empty_string_tool_returns_false(self):
         """Tool list with empty string returns False."""
-        with patch("src.parameter_validator.logger") as mock_logger:
+        with patch("claude_relay.parameter_validator.logger") as mock_logger:
             result = ParameterValidator.validate_tools(["Read", "", "Bash"])
             assert result is False
             mock_logger.error.assert_called_once()
 
     def test_whitespace_only_tool_returns_false(self):
         """Tool list with whitespace-only string returns False."""
-        with patch("src.parameter_validator.logger") as mock_logger:
+        with patch("claude_relay.parameter_validator.logger") as mock_logger:
             result = ParameterValidator.validate_tools(["Read", "   ", "Bash"])
             assert result is False
             mock_logger.error.assert_called_once()
 
     def test_non_string_tool_returns_false(self):
         """Tool list with non-string element returns False."""
-        with patch("src.parameter_validator.logger") as mock_logger:
+        with patch("claude_relay.parameter_validator.logger") as mock_logger:
             result = ParameterValidator.validate_tools(["Read", 123, "Bash"])
             assert result is False
             mock_logger.error.assert_called_once()
@@ -117,7 +117,7 @@ class TestParameterValidatorCreateEnhancedOptions:
 
     def test_max_turns_warning_for_out_of_range(self, basic_request):
         """Warning logged when max_turns is out of recommended range."""
-        with patch("src.parameter_validator.logger") as mock_logger:
+        with patch("claude_relay.parameter_validator.logger") as mock_logger:
             # Test value below range
             ParameterValidator.create_enhanced_options(basic_request, max_turns=0)
             mock_logger.warning.assert_called()
@@ -163,7 +163,7 @@ class TestParameterValidatorCreateEnhancedOptions:
 
     def test_max_thinking_tokens_warning_for_out_of_range(self, basic_request):
         """Warning logged when max_thinking_tokens is out of range."""
-        with patch("src.parameter_validator.logger") as mock_logger:
+        with patch("claude_relay.parameter_validator.logger") as mock_logger:
             # Test negative value
             ParameterValidator.create_enhanced_options(basic_request, max_thinking_tokens=-100)
             mock_logger.warning.assert_called()
@@ -192,7 +192,7 @@ class TestParameterValidatorExtractClaudeHeaders:
     def test_invalid_max_turns_logs_warning(self):
         """Invalid X-Claude-Max-Turns logs warning and is ignored."""
         headers = {"x-claude-max-turns": "not-a-number"}
-        with patch("src.parameter_validator.logger") as mock_logger:
+        with patch("claude_relay.parameter_validator.logger") as mock_logger:
             result = ParameterValidator.extract_claude_headers(headers)
             assert "max_turns" not in result
             mock_logger.warning.assert_called_once()
@@ -230,7 +230,7 @@ class TestParameterValidatorExtractClaudeHeaders:
     def test_invalid_max_thinking_tokens_logs_warning(self):
         """Invalid X-Claude-Max-Thinking-Tokens logs warning."""
         headers = {"x-claude-max-thinking-tokens": "invalid"}
-        with patch("src.parameter_validator.logger") as mock_logger:
+        with patch("claude_relay.parameter_validator.logger") as mock_logger:
             result = ParameterValidator.extract_claude_headers(headers)
             assert "max_thinking_tokens" not in result
             mock_logger.warning.assert_called_once()

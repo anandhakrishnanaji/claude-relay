@@ -1,18 +1,16 @@
 # Installing claude-relay
 
-claude-relay runs as a small HTTP server that speaks the OpenAI (`/v1/chat/completions`) and Anthropic (`/v1/messages`) APIs and forwards requests to Claude Code. Pick one of the four setups below.
+claude-relay runs as a small HTTP server that speaks the OpenAI (`/v1/chat/completions`) and Anthropic (`/v1/messages`) APIs and forwards requests to Claude Code. Pick one of the setups below.
 
 | Setup | Best for | URL |
 |---|---|---|
-| [1. Run in the foreground](#1-run-in-the-foreground) | Trying it out, development | `http://localhost:8000/v1` |
+| [1. Run it when you need it](#1-run-it-when-you-need-it) | Local development (most people) | `http://localhost:8000/v1` |
 | [2. Always-on service (systemd)](#2-always-on-service-linux-systemd) | Daily use on your own Linux machine | `http://claude.localhost:8787/v1` |
 | [3. Docker](#3-docker) | Any machine with Docker | `http://localhost:8000/v1` |
-| [4. Home server on your tailnet](#4-home-server-on-your-tailnet-docker--tsdproxy) | Reaching it from all your devices | `https://claude.<tailnet>.ts.net/v1` |
 
 ## Requirements
 
-- **Python 3.10+** (3.12 recommended)
-- **[uv](https://docs.astral.sh/uv/)**: `curl -LsSf https://astral.sh/uv/install.sh | sh`
+- **[uv](https://docs.astral.sh/uv/)** (`curl -LsSf https://astral.sh/uv/install.sh | sh`) or pipx. uv fetches Python 3.10+ if you don't have it.
 - **Credentials for Claude**, one of:
   - a Claude subscription login: install the [Claude Code CLI](https://docs.anthropic.com/en/docs/claude-code) and run `claude auth login`
   - an Anthropic API key in `ANTHROPIC_API_KEY`
@@ -20,29 +18,53 @@ claude-relay runs as a small HTTP server that speaks the OpenAI (`/v1/chat/compl
 
 The Claude Code CLI is bundled with the Python SDK, so Node.js is not required for API-key, Bedrock or Vertex auth. You only need the standalone CLI to run `claude auth login`.
 
-## Get the code
+## 1. Run it when you need it
+
+Start it from a terminal while you're developing and stop it with Ctrl+C:
+
+```bash
+uvx claude-relay-server
+```
+
+Or install the `claude-relay` command once:
+
+```bash
+uv tool install claude-relay-server     # or: pipx install claude-relay-server
+claude-relay
+```
+
+It listens on `127.0.0.1:8000`. Useful flags:
+
+```bash
+claude-relay --port 9000
+claude-relay --generate-api-key         # require a bearer token; prints it
+claude-relay --env-file ./relay.env     # settings file (default: ./.env)
+claude-relay --help
+```
+
+Settings come from flags, then environment variables, then a `.env` file in the current directory. See [.env.example](./.env.example) for all of them.
+
+### From source
+
+To work on claude-relay itself:
 
 ```bash
 git clone https://github.com/anandhakrishnanaji/claude-relay
 cd claude-relay
-```
-
-## 1. Run in the foreground
-
-```bash
 uv venv .venv --python 3.12
 uv pip install --python .venv/bin/python -e .
-cp .env.example .env          # optional: edit settings
-.venv/bin/uvicorn src.main:app --host 127.0.0.1 --port 8000
+.venv/bin/uvicorn claude_relay.main:app --reload --port 8000
 ```
 
-Stop it with Ctrl+C. Add `--reload` while developing, except on Windows (see [Troubleshooting](#troubleshooting)).
-
-Poetry works too: `poetry install`, then `poetry run uvicorn src.main:app --port 8000`.
+Drop `--reload` on Windows (see [Troubleshooting](#troubleshooting)). Poetry works too: `poetry install`, then `poetry run claude-relay`.
 
 ## 2. Always-on service (Linux, systemd)
 
+This runs from a source checkout:
+
 ```bash
+git clone https://github.com/anandhakrishnanaji/claude-relay
+cd claude-relay
 ./scripts/install-service.sh
 ```
 
@@ -66,41 +88,20 @@ PORT=9000 ./scripts/install-service.sh     # another port (delete .env first)
 
 ## 3. Docker
 
-Use the production image in `deploy/Dockerfile`. It runs as a non-root user, which the Claude CLI requires when tools are enabled. The `Dockerfile` in the repo root is a development image that runs as root with auto-reload.
+Each release publishes a non-root image to GHCR. The Claude CLI requires a non-root user when tools are enabled.
 
 ```bash
-docker build -f deploy/Dockerfile -t claude-wrapper:local .
-docker run -d --name claude-wrapper --restart unless-stopped \
+docker run -d --name claude-relay --restart unless-stopped \
   -p 127.0.0.1:8000:8000 \
   -v ~/.claude:/home/app/.claude \
   -e CLAUDE_CONFIG_DIR=/home/app/.claude \
-  claude-wrapper:local
+  ghcr.io/anandhakrishnanaji/claude-relay:latest
 ```
 
 - The `~/.claude` mount is read-write so the CLI can refresh its login token.
-- The image runs as uid 1000. If your user has a different uid, build with `--build-arg UID=$(id -u) --build-arg GID=$(id -g)`.
+- The image runs as uid 1000. If your user has a different uid, build it yourself from a checkout: `docker build -f deploy/Dockerfile --build-arg UID=$(id -u) --build-arg GID=$(id -g) -t claude-relay .`
 - On SELinux hosts (Fedora, RHEL, rootless Podman), mount with `-v ~/.claude:/home/app/.claude:Z`.
 - To use an API key instead of a login, drop the mount and pass `-e ANTHROPIC_API_KEY=...`.
-
-## 4. Home server on your tailnet (Docker + tsdproxy)
-
-This serves claude-relay over HTTPS to devices on your [Tailscale](https://tailscale.com) network only, via [tsdproxy](https://github.com/almeidapaulopt/tsdproxy).
-
-**On the server you need:** Docker, a running tsdproxy attached to an external Docker network named `proxy`, and a Claude login in `~/.claude`.
-
-> **Check the tsdproxy auth key first.** Tailscale auth keys last at most 90 days. Existing proxies keep working after the key expires, but adding a new one makes tsdproxy register a new node, and with an expired key tsdproxy 1.4.7 crashes and takes every proxy down. Generate a fresh key before deploying.
-
-```bash
-# From your machine
-ssh server 'mkdir -p ~/docker/claude-wrapper/app'
-rsync -a pyproject.toml README.md src deploy server:docker/claude-wrapper/app/
-scp deploy/tsdproxy/compose.yml server:docker/claude-wrapper/compose.yml
-
-# On the server
-cd ~/docker/claude-wrapper && docker compose up -d --build
-```
-
-It appears as `https://claude.<your-tailnet>.ts.net/v1`. Funnel is off, so it is not reachable from the public internet.
 
 ## Verify it works
 
@@ -129,17 +130,16 @@ print(reply.choices[0].message.content)
 
 claude-relay spends your Claude subscription or API credit, and a request with `"enable_tools": true` lets Claude run shell commands on the host.
 
-- Keep it bound to `127.0.0.1` unless you need it elsewhere.
-- Before exposing it on a network, set `API_KEY` in `.env`. Clients then send it as `Authorization: Bearer <key>`.
+- It binds to `127.0.0.1` by default. Keep it that way unless you need it elsewhere.
+- Before exposing it on a network (`--host 0.0.0.0`), set an API key with `--api-key`, `--generate-api-key` or `API_KEY`. Clients then send it as `Authorization: Bearer <key>`. claude-relay warns at startup if you don't.
 - Set `CORS_ORIGINS` to the browser origins that need access, or `[]` if none do. The default `["*"]` lets any website you visit call the server from your browser.
 
 ## Updating
 
 ```bash
-git pull
-uv pip install --python .venv/bin/python -e .   # if dependencies changed
-systemctl --user restart claude-wrapper           # setup 2
-docker compose up -d --build                      # setups 3/4, in the compose directory
+uv tool upgrade claude-relay-server               # setup 1 (uvx always runs the latest)
+git pull && ./scripts/install-service.sh          # setup 2
+docker pull ghcr.io/anandhakrishnanaji/claude-relay:latest   # setup 3, then recreate the container
 ```
 
 ## Troubleshooting
@@ -150,5 +150,5 @@ docker compose up -d --build                      # setups 3/4, in the compose d
 | `--dangerously-skip-permissions cannot be used with root` | The container runs as root. Use `deploy/Dockerfile`, which runs as a non-root user. |
 | `Permission denied` on `~/.claude` in Docker | uid mismatch: rebuild with `--build-arg UID=$(id -u)`. On SELinux, add `:Z` to the mount. |
 | Windows: `Failed to start Claude Code` / `claude not found` | Run uvicorn **without** `--reload`. WSL also works. |
-| `address already in use` | Another process has the port. Pick another with `PORT=...` (and `--port` for uvicorn). |
+| `port 8000 on 127.0.0.1 is already in use` | Another process has the port. Pick another with `--port`. |
 | Service won't start after reboot | Check `loginctl show-user $USER -p Linger` says `yes`, then `journalctl --user -u claude-wrapper -n 50`. |

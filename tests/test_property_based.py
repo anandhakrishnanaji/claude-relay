@@ -8,9 +8,9 @@ These tests generate random inputs to find edge cases that manual testing might 
 import pytest
 from hypothesis import given, strategies as st, settings, assume
 
-from src.message_adapter import MessageAdapter
-from src.parameter_validator import ParameterValidator
-from src.constants import CLAUDE_MODELS
+from claude_relay.message_adapter import MessageAdapter
+from claude_relay.parameter_validator import ParameterValidator
+from claude_relay.constants import CLAUDE_MODELS
 
 
 class TestMessageAdapterProperties:

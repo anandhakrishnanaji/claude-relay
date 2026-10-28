@@ -1,3 +1,3 @@
 """claude-relay - A FastAPI-based OpenAI-compatible API for Claude Code."""
 
-__version__ = "2.3.0"
+__version__ = "3.0.0"

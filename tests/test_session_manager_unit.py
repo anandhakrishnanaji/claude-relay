@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Unit tests for src/session_manager.py
+Unit tests for claude_relay/session_manager.py
 
 Tests the Session and SessionManager classes.
 These are pure unit tests that don't require a running server.
@@ -11,8 +11,8 @@ from datetime import datetime, timedelta
 from unittest.mock import MagicMock, patch
 import asyncio
 
-from src.session_manager import Session, SessionManager
-from src.models import Message
+from claude_relay.session_manager import Session, SessionManager
+from claude_relay.models import Message
 
 
 class TestSession:

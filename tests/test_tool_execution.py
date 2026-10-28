@@ -37,14 +37,14 @@ class TestDefaultAllowedTools:
 
     def test_default_allowed_tools_defined(self):
         """Test that DEFAULT_ALLOWED_TOOLS is defined."""
-        from src.constants import DEFAULT_ALLOWED_TOOLS
+        from claude_relay.constants import DEFAULT_ALLOWED_TOOLS
 
         assert isinstance(DEFAULT_ALLOWED_TOOLS, list)
         assert len(DEFAULT_ALLOWED_TOOLS) > 0
 
     def test_default_allowed_tools_contains_safe_tools(self):
         """Test that DEFAULT_ALLOWED_TOOLS contains expected safe tools."""
-        from src.constants import DEFAULT_ALLOWED_TOOLS
+        from claude_relay.constants import DEFAULT_ALLOWED_TOOLS
 
         # These tools should be in the default allowed set
         expected_tools = ["Read", "Glob", "Grep", "Bash", "Write", "Edit"]
@@ -53,7 +53,7 @@ class TestDefaultAllowedTools:
 
     def test_default_allowed_tools_excludes_dangerous(self):
         """Test that potentially dangerous tools are excluded by default."""
-        from src.constants import DEFAULT_ALLOWED_TOOLS
+        from claude_relay.constants import DEFAULT_ALLOWED_TOOLS
 
         # These tools should NOT be in the default allowed set
         # (they're in DEFAULT_DISALLOWED_TOOLS)
@@ -69,7 +69,7 @@ class TestParseClaudeMessage:
 
     def test_result_message_priority(self):
         """Test that ResultMessage.result is prioritized over AssistantMessage."""
-        from src.claude_cli import ClaudeCodeCLI
+        from claude_relay.claude_cli import ClaudeCodeCLI
 
         cli = ClaudeCodeCLI(cwd="/tmp")
 
@@ -97,7 +97,7 @@ class TestParseClaudeMessage:
 
     def test_fallback_to_last_assistant_message(self):
         """Test fallback to last AssistantMessage when no ResultMessage."""
-        from src.claude_cli import ClaudeCodeCLI
+        from claude_relay.claude_cli import ClaudeCodeCLI
 
         cli = ClaudeCodeCLI(cwd="/tmp")
 
@@ -118,7 +118,7 @@ class TestParseClaudeMessage:
 
     def test_handles_empty_messages(self):
         """Test handling of empty message list."""
-        from src.claude_cli import ClaudeCodeCLI
+        from claude_relay.claude_cli import ClaudeCodeCLI
 
         cli = ClaudeCodeCLI(cwd="/tmp")
 
@@ -127,7 +127,7 @@ class TestParseClaudeMessage:
 
     def test_handles_dict_content_blocks(self):
         """Test handling of dict-based content blocks (old format)."""
-        from src.claude_cli import ClaudeCodeCLI
+        from claude_relay.claude_cli import ClaudeCodeCLI
 
         cli = ClaudeCodeCLI(cwd="/tmp")
 
@@ -142,7 +142,7 @@ class TestClaudeCliPermissionMode:
 
     def test_run_completion_accepts_permission_mode(self):
         """Test that run_completion method accepts permission_mode parameter."""
-        from src.claude_cli import ClaudeCodeCLI
+        from claude_relay.claude_cli import ClaudeCodeCLI
         import inspect
 
         # Check that permission_mode is in the method signature

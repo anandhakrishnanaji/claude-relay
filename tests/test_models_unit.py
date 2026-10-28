@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Unit tests for src/models.py
+Unit tests for claude_relay/models.py
 
 Tests all Pydantic models including validators and methods.
 These are pure unit tests that don't require a running server.
@@ -10,7 +10,7 @@ import pytest
 from datetime import datetime
 from unittest.mock import patch
 
-from src.models import (
+from claude_relay.models import (
     ContentPart,
     Message,
     StreamOptions,
@@ -199,7 +199,7 @@ class TestChatCompletionRequest:
             presence_penalty=0.5,
             stop=["END"],
         )
-        with patch("src.models.logger") as mock_logger:
+        with patch("claude_relay.models.logger") as mock_logger:
             request.log_parameter_info()
             # Should have info for temperature, warnings for penalty and stop
             assert mock_logger.info.called

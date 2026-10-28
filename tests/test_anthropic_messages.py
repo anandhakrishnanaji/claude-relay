@@ -19,7 +19,7 @@ class TestAnthropicMessagesModels:
 
     def test_anthropic_text_block(self):
         """Test AnthropicTextBlock model."""
-        from src.models import AnthropicTextBlock
+        from claude_relay.models import AnthropicTextBlock
 
         block = AnthropicTextBlock(text="Hello world")
         assert block.type == "text"
@@ -27,7 +27,7 @@ class TestAnthropicMessagesModels:
 
     def test_anthropic_message(self):
         """Test AnthropicMessage model."""
-        from src.models import AnthropicMessage
+        from claude_relay.models import AnthropicMessage
 
         # String content
         msg = AnthropicMessage(role="user", content="Hello")
@@ -35,7 +35,7 @@ class TestAnthropicMessagesModels:
         assert msg.content == "Hello"
 
         # List content
-        from src.models import AnthropicTextBlock
+        from claude_relay.models import AnthropicTextBlock
 
         msg2 = AnthropicMessage(role="assistant", content=[AnthropicTextBlock(text="Hi there")])
         assert msg2.role == "assistant"
@@ -43,7 +43,7 @@ class TestAnthropicMessagesModels:
 
     def test_anthropic_messages_request(self):
         """Test AnthropicMessagesRequest model."""
-        from src.models import AnthropicMessagesRequest, AnthropicMessage
+        from claude_relay.models import AnthropicMessagesRequest, AnthropicMessage
 
         request = AnthropicMessagesRequest(
             model="claude-sonnet-4-5-20250929",
@@ -59,7 +59,7 @@ class TestAnthropicMessagesModels:
 
     def test_anthropic_messages_request_to_openai(self):
         """Test conversion from Anthropic to OpenAI message format."""
-        from src.models import AnthropicMessagesRequest, AnthropicMessage
+        from claude_relay.models import AnthropicMessagesRequest, AnthropicMessage
 
         request = AnthropicMessagesRequest(
             model="claude-sonnet-4-5-20250929",
@@ -79,7 +79,7 @@ class TestAnthropicMessagesModels:
 
     def test_anthropic_messages_response(self):
         """Test AnthropicMessagesResponse model."""
-        from src.models import (
+        from claude_relay.models import (
             AnthropicMessagesResponse,
             AnthropicTextBlock,
             AnthropicUsage,
@@ -107,7 +107,7 @@ class TestAnthropicMessagesToolGating:
     def _post(self, payload):
         from unittest.mock import patch
         from fastapi.testclient import TestClient
-        import src.main as main
+        import claude_relay.main as main
 
         captured = {}
 
@@ -124,7 +124,7 @@ class TestAnthropicMessagesToolGating:
         return response, captured
 
     def test_tools_disabled_by_default(self):
-        from src.constants import CLAUDE_TOOLS
+        from claude_relay.constants import CLAUDE_TOOLS
 
         response, opts = self._post(
             {"model": "claude-haiku-4-5-20251001", "messages": [{"role": "user", "content": "hi"}]}
@@ -136,7 +136,7 @@ class TestAnthropicMessagesToolGating:
         assert "allowed_tools" not in opts
 
     def test_tools_enabled_on_request(self):
-        from src.constants import DEFAULT_ALLOWED_TOOLS
+        from claude_relay.constants import DEFAULT_ALLOWED_TOOLS
 
         response, opts = self._post(
             {

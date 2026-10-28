@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Unit tests for src/claude_cli.py
+Unit tests for claude_relay/claude_cli.py
 
 Tests the ClaudeCodeCLI class methods.
 These are pure unit tests that don't require a running server or Claude SDK.
@@ -20,7 +20,7 @@ class TestClaudeCodeCLIParseMessage:
     @pytest.fixture
     def cli_class(self):
         """Get the ClaudeCodeCLI class without instantiating."""
-        from src.claude_cli import ClaudeCodeCLI
+        from claude_relay.claude_cli import ClaudeCodeCLI
 
         return ClaudeCodeCLI
 
@@ -148,7 +148,7 @@ class TestClaudeCodeCLIExtractMetadata:
     @pytest.fixture
     def cli_class(self):
         """Get the ClaudeCodeCLI class."""
-        from src.claude_cli import ClaudeCodeCLI
+        from claude_relay.claude_cli import ClaudeCodeCLI
 
         return ClaudeCodeCLI
 
@@ -247,7 +247,7 @@ class TestClaudeCodeCLIEstimateTokenUsage:
     @pytest.fixture
     def cli_class(self):
         """Get the ClaudeCodeCLI class."""
-        from src.claude_cli import ClaudeCodeCLI
+        from claude_relay.claude_cli import ClaudeCodeCLI
 
         return ClaudeCodeCLI
 
@@ -299,7 +299,7 @@ class TestClaudeCodeCLICleanupTempDir:
 
     def test_cleanup_removes_existing_dir(self):
         """Cleanup removes existing temp directory."""
-        from src.claude_cli import ClaudeCodeCLI
+        from claude_relay.claude_cli import ClaudeCodeCLI
 
         # Create a mock instance
         cli = MagicMock(spec=ClaudeCodeCLI)
@@ -319,7 +319,7 @@ class TestClaudeCodeCLICleanupTempDir:
 
     def test_cleanup_handles_missing_dir(self):
         """Cleanup handles already-deleted directory gracefully."""
-        from src.claude_cli import ClaudeCodeCLI
+        from claude_relay.claude_cli import ClaudeCodeCLI
 
         cli = MagicMock(spec=ClaudeCodeCLI)
         cli.temp_dir = "/nonexistent/test/dir/12345"
@@ -331,7 +331,7 @@ class TestClaudeCodeCLICleanupTempDir:
 
     def test_cleanup_no_temp_dir_set(self):
         """Cleanup does nothing when temp_dir is None."""
-        from src.claude_cli import ClaudeCodeCLI
+        from claude_relay.claude_cli import ClaudeCodeCLI
 
         cli = MagicMock(spec=ClaudeCodeCLI)
         cli.temp_dir = None
@@ -366,12 +366,12 @@ class TestClaudeCodeCLIInit:
     def test_init_with_cwd(self):
         """ClaudeCodeCLI initializes with provided cwd."""
         with tempfile.TemporaryDirectory() as temp_dir:
-            with patch("src.auth.validate_claude_code_auth") as mock_validate:
-                with patch("src.auth.auth_manager") as mock_auth:
+            with patch("claude_relay.auth.validate_claude_code_auth") as mock_validate:
+                with patch("claude_relay.auth.auth_manager") as mock_auth:
                     mock_validate.return_value = (True, {"method": "anthropic"})
                     mock_auth.get_claude_code_env_vars.return_value = {}
 
-                    from src.claude_cli import ClaudeCodeCLI
+                    from claude_relay.claude_cli import ClaudeCodeCLI
 
                     cli = ClaudeCodeCLI(cwd=temp_dir)
 
@@ -381,25 +381,25 @@ class TestClaudeCodeCLIInit:
 
     def test_init_with_invalid_cwd_raises(self):
         """ClaudeCodeCLI raises ValueError for non-existent cwd."""
-        with patch("src.auth.validate_claude_code_auth") as mock_validate:
-            with patch("src.auth.auth_manager") as mock_auth:
+        with patch("claude_relay.auth.validate_claude_code_auth") as mock_validate:
+            with patch("claude_relay.auth.auth_manager") as mock_auth:
                 mock_validate.return_value = (True, {"method": "anthropic"})
                 mock_auth.get_claude_code_env_vars.return_value = {}
 
-                from src.claude_cli import ClaudeCodeCLI
+                from claude_relay.claude_cli import ClaudeCodeCLI
 
                 with pytest.raises(ValueError, match="Working directory does not exist"):
                     ClaudeCodeCLI(cwd="/nonexistent/path/12345")
 
     def test_init_without_cwd_creates_temp(self):
         """ClaudeCodeCLI creates temp directory when no cwd provided."""
-        with patch("src.auth.validate_claude_code_auth") as mock_validate:
-            with patch("src.auth.auth_manager") as mock_auth:
+        with patch("claude_relay.auth.validate_claude_code_auth") as mock_validate:
+            with patch("claude_relay.auth.auth_manager") as mock_auth:
                 with patch("atexit.register"):  # Don't actually register cleanup
                     mock_validate.return_value = (True, {"method": "anthropic"})
                     mock_auth.get_claude_code_env_vars.return_value = {}
 
-                    from src.claude_cli import ClaudeCodeCLI
+                    from claude_relay.claude_cli import ClaudeCodeCLI
 
                     cli = ClaudeCodeCLI()
 
@@ -416,12 +416,12 @@ class TestClaudeCodeCLIInit:
     def test_init_with_custom_timeout(self):
         """ClaudeCodeCLI uses custom timeout."""
         with tempfile.TemporaryDirectory() as temp_dir:
-            with patch("src.auth.validate_claude_code_auth") as mock_validate:
-                with patch("src.auth.auth_manager") as mock_auth:
+            with patch("claude_relay.auth.validate_claude_code_auth") as mock_validate:
+                with patch("claude_relay.auth.auth_manager") as mock_auth:
                     mock_validate.return_value = (True, {"method": "anthropic"})
                     mock_auth.get_claude_code_env_vars.return_value = {}
 
-                    from src.claude_cli import ClaudeCodeCLI
+                    from claude_relay.claude_cli import ClaudeCodeCLI
 
                     cli = ClaudeCodeCLI(timeout=120000, cwd=temp_dir)
 
@@ -430,13 +430,13 @@ class TestClaudeCodeCLIInit:
     def test_init_auth_validation_failure(self):
         """ClaudeCodeCLI handles auth validation failure gracefully."""
         with tempfile.TemporaryDirectory() as temp_dir:
-            with patch("src.auth.validate_claude_code_auth") as mock_validate:
-                with patch("src.auth.auth_manager") as mock_auth:
+            with patch("claude_relay.auth.validate_claude_code_auth") as mock_validate:
+                with patch("claude_relay.auth.auth_manager") as mock_auth:
                     # Auth fails
                     mock_validate.return_value = (False, {"errors": ["Missing API key"]})
                     mock_auth.get_claude_code_env_vars.return_value = {}
 
-                    from src.claude_cli import ClaudeCodeCLI
+                    from claude_relay.claude_cli import ClaudeCodeCLI
 
                     # Should not raise, just log warning
                     cli = ClaudeCodeCLI(cwd=temp_dir)
@@ -450,12 +450,12 @@ class TestClaudeCodeCLIVerifyCLI:
     def cli_instance(self):
         """Create a CLI instance with mocked auth."""
         with tempfile.TemporaryDirectory() as temp_dir:
-            with patch("src.auth.validate_claude_code_auth") as mock_validate:
-                with patch("src.auth.auth_manager") as mock_auth:
+            with patch("claude_relay.auth.validate_claude_code_auth") as mock_validate:
+                with patch("claude_relay.auth.auth_manager") as mock_auth:
                     mock_validate.return_value = (True, {"method": "anthropic"})
                     mock_auth.get_claude_code_env_vars.return_value = {}
 
-                    from src.claude_cli import ClaudeCodeCLI
+                    from claude_relay.claude_cli import ClaudeCodeCLI
 
                     cli = ClaudeCodeCLI(cwd=temp_dir)
                     yield cli
@@ -468,7 +468,7 @@ class TestClaudeCodeCLIVerifyCLI:
         async def mock_query(*args, **kwargs):
             yield mock_message
 
-        with patch("src.claude_cli.query", mock_query):
+        with patch("claude_relay.claude_cli.query", mock_query):
             result = await cli_instance.verify_cli()
             assert result is True
 
@@ -480,7 +480,7 @@ class TestClaudeCodeCLIVerifyCLI:
             return
             yield  # Make it a generator but yield nothing
 
-        with patch("src.claude_cli.query", mock_query):
+        with patch("claude_relay.claude_cli.query", mock_query):
             result = await cli_instance.verify_cli()
             assert result is False
 
@@ -492,7 +492,7 @@ class TestClaudeCodeCLIVerifyCLI:
             raise RuntimeError("SDK error")
             yield  # Make it a generator
 
-        with patch("src.claude_cli.query", mock_query):
+        with patch("claude_relay.claude_cli.query", mock_query):
             result = await cli_instance.verify_cli()
             assert result is False
 
@@ -504,14 +504,14 @@ class TestClaudeCodeCLIRunCompletion:
     def cli_instance(self):
         """Create a CLI instance with mocked auth."""
         with tempfile.TemporaryDirectory() as temp_dir:
-            with patch("src.auth.validate_claude_code_auth") as mock_validate:
-                with patch("src.auth.auth_manager") as mock_auth:
+            with patch("claude_relay.auth.validate_claude_code_auth") as mock_validate:
+                with patch("claude_relay.auth.auth_manager") as mock_auth:
                     mock_validate.return_value = (True, {"method": "anthropic"})
                     mock_auth.get_claude_code_env_vars.return_value = {
                         "ANTHROPIC_API_KEY": "test-key"
                     }
 
-                    from src.claude_cli import ClaudeCodeCLI
+                    from claude_relay.claude_cli import ClaudeCodeCLI
 
                     cli = ClaudeCodeCLI(cwd=temp_dir)
                     yield cli
@@ -524,7 +524,7 @@ class TestClaudeCodeCLIRunCompletion:
         async def mock_query(*args, **kwargs):
             yield mock_message
 
-        with patch("src.claude_cli.query", mock_query):
+        with patch("claude_relay.claude_cli.query", mock_query):
             messages = []
             async for msg in cli_instance.run_completion("Hello"):
                 messages.append(msg)
@@ -542,7 +542,7 @@ class TestClaudeCodeCLIRunCompletion:
             captured_options.append(options)
             yield mock_message
 
-        with patch("src.claude_cli.query", mock_query):
+        with patch("claude_relay.claude_cli.query", mock_query):
             async for _ in cli_instance.run_completion("Hello", system_prompt="You are helpful"):
                 pass
 
@@ -560,7 +560,7 @@ class TestClaudeCodeCLIRunCompletion:
             captured_options.append(options)
             yield {"type": "assistant", "content": "Response"}
 
-        with patch("src.claude_cli.query", mock_query):
+        with patch("claude_relay.claude_cli.query", mock_query):
             async for _ in cli_instance.run_completion("Hello"):
                 pass
 
@@ -576,7 +576,7 @@ class TestClaudeCodeCLIRunCompletion:
             captured_options.append(options)
             yield mock_message
 
-        with patch("src.claude_cli.query", mock_query):
+        with patch("claude_relay.claude_cli.query", mock_query):
             async for _ in cli_instance.run_completion("Hello", model="claude-3-opus"):
                 pass
 
@@ -592,7 +592,7 @@ class TestClaudeCodeCLIRunCompletion:
             captured_options.append(options)
             yield mock_message
 
-        with patch("src.claude_cli.query", mock_query):
+        with patch("claude_relay.claude_cli.query", mock_query):
             async for _ in cli_instance.run_completion(
                 "Hello",
                 allowed_tools=["Bash", "Read"],
@@ -613,7 +613,7 @@ class TestClaudeCodeCLIRunCompletion:
             captured_options.append(options)
             yield mock_message
 
-        with patch("src.claude_cli.query", mock_query):
+        with patch("claude_relay.claude_cli.query", mock_query):
             async for _ in cli_instance.run_completion("Hello", permission_mode="acceptEdits"):
                 pass
 
@@ -629,7 +629,7 @@ class TestClaudeCodeCLIRunCompletion:
             captured_options.append(options)
             yield mock_message
 
-        with patch("src.claude_cli.query", mock_query):
+        with patch("claude_relay.claude_cli.query", mock_query):
             async for _ in cli_instance.run_completion("Hello", continue_session=True):
                 pass
 
@@ -645,7 +645,7 @@ class TestClaudeCodeCLIRunCompletion:
             captured_options.append(options)
             yield mock_message
 
-        with patch("src.claude_cli.query", mock_query):
+        with patch("claude_relay.claude_cli.query", mock_query):
             async for _ in cli_instance.run_completion("Hello", session_id="sess-123"):
                 pass
 
@@ -662,7 +662,7 @@ class TestClaudeCodeCLIRunCompletion:
         async def mock_query(*args, **kwargs):
             yield mock_obj
 
-        with patch("src.claude_cli.query", mock_query):
+        with patch("claude_relay.claude_cli.query", mock_query):
             messages = []
             async for msg in cli_instance.run_completion("Hello"):
                 messages.append(msg)
@@ -680,7 +680,7 @@ class TestClaudeCodeCLIRunCompletion:
             raise RuntimeError("SDK failed")
             yield  # Make it a generator
 
-        with patch("src.claude_cli.query", mock_query):
+        with patch("claude_relay.claude_cli.query", mock_query):
             messages = []
             async for msg in cli_instance.run_completion("Hello"):
                 messages.append(msg)
@@ -702,7 +702,7 @@ class TestClaudeCodeCLIRunCompletion:
         async def mock_query(*args, **kwargs):
             yield mock_message
 
-        with patch("src.claude_cli.query", mock_query):
+        with patch("claude_relay.claude_cli.query", mock_query):
             async for _ in cli_instance.run_completion("Hello"):
                 pass
 
@@ -721,7 +721,7 @@ class TestClaudeCodeCLICleanupException:
 
     def test_cleanup_exception_is_caught(self):
         """Cleanup catches exceptions during rmtree."""
-        from src.claude_cli import ClaudeCodeCLI
+        from claude_relay.claude_cli import ClaudeCodeCLI
 
         cli = MagicMock(spec=ClaudeCodeCLI)
         temp_dir = tempfile.mkdtemp(prefix="test_cleanup_exc_")

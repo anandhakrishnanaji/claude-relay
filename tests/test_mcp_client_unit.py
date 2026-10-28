@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Unit tests for src/mcp_client.py
+Unit tests for claude_relay/mcp_client.py
 
 Tests the MCPClient, MCPServerConfig, and MCPServerConnection classes.
 These are pure unit tests that don't require actual MCP servers.
@@ -11,7 +11,7 @@ from datetime import datetime
 from unittest.mock import MagicMock, patch, AsyncMock
 import threading
 
-from src.mcp_client import (
+from claude_relay.mcp_client import (
     MCPServerConfig,
     MCPServerConnection,
     MCPClient,
@@ -526,11 +526,11 @@ class TestMCPClientConnectServerMCPAvailable:
         return MCPClient()
 
     @pytest.mark.asyncio
-    @patch("src.mcp_client.MCP_AVAILABLE", False)
+    @patch("claude_relay.mcp_client.MCP_AVAILABLE", False)
     async def test_connect_server_mcp_not_available(self):
         """connect_server returns False when MCP SDK not available."""
         # Create client with mocked MCP_AVAILABLE
-        with patch("src.mcp_client.MCP_AVAILABLE", False):
+        with patch("claude_relay.mcp_client.MCP_AVAILABLE", False):
             client = MCPClient()
             config = MCPServerConfig(name="test", command="cmd")
             client.register_server(config)
@@ -591,9 +591,9 @@ class TestMCPClientConnectServerWithMocking:
         mock_read = MagicMock()
         mock_write = MagicMock()
 
-        with patch("src.mcp_client.StdioServerParameters") as mock_params:
-            with patch("src.mcp_client.stdio_client", new_callable=AsyncMock) as mock_stdio:
-                with patch("src.mcp_client.ClientSession") as mock_client_session:
+        with patch("claude_relay.mcp_client.StdioServerParameters") as mock_params:
+            with patch("claude_relay.mcp_client.stdio_client", new_callable=AsyncMock) as mock_stdio:
+                with patch("claude_relay.mcp_client.ClientSession") as mock_client_session:
                     mock_stdio.return_value = (mock_read, mock_write)
                     mock_client_session.return_value = mock_session
 
@@ -621,9 +621,9 @@ class TestMCPClientConnectServerWithMocking:
         mock_session.list_resources = AsyncMock(return_value=MagicMock(resources=[]))
         mock_session.list_prompts = AsyncMock(return_value=MagicMock(prompts=[]))
 
-        with patch("src.mcp_client.StdioServerParameters"):
-            with patch("src.mcp_client.stdio_client", new_callable=AsyncMock) as mock_stdio:
-                with patch("src.mcp_client.ClientSession") as mock_client_session:
+        with patch("claude_relay.mcp_client.StdioServerParameters"):
+            with patch("claude_relay.mcp_client.stdio_client", new_callable=AsyncMock) as mock_stdio:
+                with patch("claude_relay.mcp_client.ClientSession") as mock_client_session:
                     mock_stdio.return_value = (MagicMock(), MagicMock())
                     mock_client_session.return_value = mock_session
 
@@ -648,9 +648,9 @@ class TestMCPClientConnectServerWithMocking:
         mock_session.list_resources = AsyncMock(side_effect=RuntimeError("Resources error"))
         mock_session.list_prompts = AsyncMock(return_value=MagicMock(prompts=[]))
 
-        with patch("src.mcp_client.StdioServerParameters"):
-            with patch("src.mcp_client.stdio_client", new_callable=AsyncMock) as mock_stdio:
-                with patch("src.mcp_client.ClientSession") as mock_client_session:
+        with patch("claude_relay.mcp_client.StdioServerParameters"):
+            with patch("claude_relay.mcp_client.stdio_client", new_callable=AsyncMock) as mock_stdio:
+                with patch("claude_relay.mcp_client.ClientSession") as mock_client_session:
                     mock_stdio.return_value = (MagicMock(), MagicMock())
                     mock_client_session.return_value = mock_session
 
@@ -675,9 +675,9 @@ class TestMCPClientConnectServerWithMocking:
         mock_session.list_resources = AsyncMock(return_value=MagicMock(resources=[]))
         mock_session.list_prompts = AsyncMock(side_effect=RuntimeError("Prompts error"))
 
-        with patch("src.mcp_client.StdioServerParameters"):
-            with patch("src.mcp_client.stdio_client", new_callable=AsyncMock) as mock_stdio:
-                with patch("src.mcp_client.ClientSession") as mock_client_session:
+        with patch("claude_relay.mcp_client.StdioServerParameters"):
+            with patch("claude_relay.mcp_client.stdio_client", new_callable=AsyncMock) as mock_stdio:
+                with patch("claude_relay.mcp_client.ClientSession") as mock_client_session:
                     mock_stdio.return_value = (MagicMock(), MagicMock())
                     mock_client_session.return_value = mock_session
 
@@ -696,8 +696,8 @@ class TestMCPClientConnectServerWithMocking:
         config = MCPServerConfig(name="test", command="test-cmd")
         client.register_server(config)
 
-        with patch("src.mcp_client.StdioServerParameters"):
-            with patch("src.mcp_client.stdio_client", new_callable=AsyncMock) as mock_stdio:
+        with patch("claude_relay.mcp_client.StdioServerParameters"):
+            with patch("claude_relay.mcp_client.stdio_client", new_callable=AsyncMock) as mock_stdio:
                 mock_stdio.side_effect = ConnectionError("Connection refused")
 
                 result = await client.connect_server("test")
@@ -712,8 +712,8 @@ class TestMCPClientConnectServerWithMocking:
         config = MCPServerConfig(name="test", command="test-cmd")
         client.register_server(config)
 
-        with patch("src.mcp_client.StdioServerParameters"):
-            with patch("src.mcp_client.stdio_client", new_callable=AsyncMock) as mock_stdio:
+        with patch("claude_relay.mcp_client.StdioServerParameters"):
+            with patch("claude_relay.mcp_client.stdio_client", new_callable=AsyncMock) as mock_stdio:
                 mock_stdio.side_effect = ValueError("Invalid config")
 
                 result = await client.connect_server("test")
@@ -728,8 +728,8 @@ class TestMCPClientConnectServerWithMocking:
         config = MCPServerConfig(name="test", command="test-cmd")
         client.register_server(config)
 
-        with patch("src.mcp_client.StdioServerParameters"):
-            with patch("src.mcp_client.stdio_client", new_callable=AsyncMock) as mock_stdio:
+        with patch("claude_relay.mcp_client.StdioServerParameters"):
+            with patch("claude_relay.mcp_client.stdio_client", new_callable=AsyncMock) as mock_stdio:
                 mock_stdio.side_effect = TimeoutError("Connection timeout")
 
                 result = await client.connect_server("test")
@@ -744,8 +744,8 @@ class TestMCPClientConnectServerWithMocking:
         config = MCPServerConfig(name="test", command="nonexistent-cmd")
         client.register_server(config)
 
-        with patch("src.mcp_client.StdioServerParameters"):
-            with patch("src.mcp_client.stdio_client", new_callable=AsyncMock) as mock_stdio:
+        with patch("claude_relay.mcp_client.StdioServerParameters"):
+            with patch("claude_relay.mcp_client.stdio_client", new_callable=AsyncMock) as mock_stdio:
                 mock_stdio.side_effect = FileNotFoundError("Command not found")
 
                 result = await client.connect_server("test")
@@ -760,8 +760,8 @@ class TestMCPClientConnectServerWithMocking:
         config = MCPServerConfig(name="test", command="test-cmd")
         client.register_server(config)
 
-        with patch("src.mcp_client.StdioServerParameters"):
-            with patch("src.mcp_client.stdio_client", new_callable=AsyncMock) as mock_stdio:
+        with patch("claude_relay.mcp_client.StdioServerParameters"):
+            with patch("claude_relay.mcp_client.stdio_client", new_callable=AsyncMock) as mock_stdio:
                 mock_stdio.side_effect = PermissionError("Permission denied")
 
                 result = await client.connect_server("test")
@@ -776,8 +776,8 @@ class TestMCPClientConnectServerWithMocking:
         config = MCPServerConfig(name="test", command="test-cmd")
         client.register_server(config)
 
-        with patch("src.mcp_client.StdioServerParameters"):
-            with patch("src.mcp_client.stdio_client", new_callable=AsyncMock) as mock_stdio:
+        with patch("claude_relay.mcp_client.StdioServerParameters"):
+            with patch("claude_relay.mcp_client.stdio_client", new_callable=AsyncMock) as mock_stdio:
                 mock_stdio.side_effect = RuntimeError("Unexpected error")
 
                 result = await client.connect_server("test")

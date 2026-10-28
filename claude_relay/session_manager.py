@@ -5,7 +5,7 @@ from typing import Dict, List, Optional, Tuple
 from dataclasses import dataclass, field
 from threading import Lock
 
-from src.models import Message, SessionInfo
+from claude_relay.models import Message, SessionInfo
 
 logger = logging.getLogger(__name__)
 

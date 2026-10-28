@@ -1,14 +1,14 @@
 #!/usr/bin/env python3
 """
-Unit tests for src/message_adapter.py
+Unit tests for claude_relay/message_adapter.py
 
 Tests the MessageAdapter class for message format conversion.
 These are pure unit tests that don't require a running server.
 """
 
 import pytest
-from src.message_adapter import MessageAdapter
-from src.models import Message
+from claude_relay.message_adapter import MessageAdapter
+from claude_relay.models import Message
 
 
 class TestMessagesToPrompt:
