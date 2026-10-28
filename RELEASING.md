@@ -24,7 +24,7 @@ The PyPI name `claude-relay` belongs to an unrelated project, so the names diffe
 
 ## One-time setup
 
-Already done for this repo; listed here in case it needs redoing.
+Do this once per project (and again if the repo or workflow file is renamed).
 
 1. **PyPI trusted publisher.** On PyPI, open `claude-relay-server` → Settings → Publishing → Add a GitHub publisher:
    owner `anandhakrishnanaji`, repository `claude-relay`, workflow `release.yml`, environment `pypi`.
