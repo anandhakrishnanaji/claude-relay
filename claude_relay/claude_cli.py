@@ -1,3 +1,4 @@
+import asyncio
 import os
 import tempfile
 import atexit
@@ -11,6 +12,15 @@ from claude_agent_sdk import query, ClaudeAgentOptions
 from claude_relay.constants import CLAUDE_SETTING_SOURCES
 
 logger = logging.getLogger(__name__)
+
+# Linux caps a single argv string at MAX_ARG_STRLEN (131072 bytes) and the SDK
+# passes a string system prompt as one --system-prompt argument. Prompts larger
+# than this many UTF-8 bytes are written to a temp file instead.
+SYSTEM_PROMPT_FILE_THRESHOLD_BYTES = 100_000
+
+
+class _QueryTimeout(Exception):
+    """Raised internally when a query exceeds ClaudeCodeCLI.timeout."""
 
 
 class ClaudeCodeCLI:
@@ -66,6 +76,7 @@ class ClaudeCodeCLI:
                     max_turns=1,
                     cwd=self.cwd,
                     system_prompt={"type": "preset", "preset": "claude_code"},
+                    env=dict(self.claude_env_vars or {}),
                 ),
             ):
                 messages.append(message)
@@ -103,91 +114,114 @@ class ClaudeCodeCLI:
         max_turns: int = 10,
         allowed_tools: Optional[List[str]] = None,
         disallowed_tools: Optional[List[str]] = None,
-        session_id: Optional[str] = None,
-        continue_session: bool = False,
         permission_mode: Optional[str] = None,
     ) -> AsyncGenerator[Dict[str, Any], None]:
-        """Run Claude Agent using the Python SDK and yield response chunks."""
+        """Run Claude Agent using the Python SDK and yield response chunks.
+
+        The whole query iteration is bounded by ``self.timeout`` seconds.
+        """
+        system_prompt_file = None
+        sdk_stream = None
 
         try:
-            # Set authentication environment variables (if any)
-            original_env = {}
-            if self.claude_env_vars:  # Only set env vars if we have any
-                for key, value in self.claude_env_vars.items():
-                    original_env[key] = os.environ.get(key)
-                    os.environ[key] = value
+            # Build SDK options. Auth env vars go to the CLI subprocess via
+            # options.env, so os.environ is never touched (it is shared by
+            # concurrent requests).
+            options = ClaudeAgentOptions(
+                max_turns=max_turns,
+                cwd=self.cwd,
+                setting_sources=list(CLAUDE_SETTING_SOURCES),
+                env=dict(self.claude_env_vars or {}),
+            )
 
-            try:
-                # Build SDK options
-                options = ClaudeAgentOptions(
-                    max_turns=max_turns,
-                    cwd=self.cwd,
-                    setting_sources=list(CLAUDE_SETTING_SOURCES),
-                )
+            # Set model if specified
+            if model:
+                options.model = model
 
-                # Set model if specified
-                if model:
-                    options.model = model
-
-                # Set system prompt. The SDK takes a plain string (or a typed
-                # preset/custom/file dict); any other dict shape is silently
-                # dropped and the CLI falls back to its own Claude Code prompt.
-                if system_prompt:
-                    options.system_prompt = system_prompt
+            # Set system prompt. The SDK takes a plain string (or a typed
+            # preset/custom/file dict); any other dict shape is silently
+            # dropped and the CLI falls back to its own Claude Code prompt.
+            if system_prompt:
+                if len(system_prompt.encode("utf-8")) > SYSTEM_PROMPT_FILE_THRESHOLD_BYTES:
+                    # A string prompt is passed as a single argv entry, which
+                    # Linux caps at MAX_ARG_STRLEN (128 KiB). Hand the CLI a
+                    # file instead.
+                    system_prompt_file = self._write_system_prompt_file(system_prompt)
+                    options.system_prompt = {"type": "file", "path": system_prompt_file}
                 else:
-                    # Use Claude Code preset to maintain expected behavior
-                    options.system_prompt = {"type": "preset", "preset": "claude_code"}
+                    options.system_prompt = system_prompt
+            else:
+                # Use Claude Code preset to maintain expected behavior
+                options.system_prompt = {"type": "preset", "preset": "claude_code"}
 
-                # Set tool restrictions
-                if allowed_tools:
-                    options.allowed_tools = allowed_tools
-                if disallowed_tools:
-                    options.disallowed_tools = disallowed_tools
+            # Set tool restrictions
+            if allowed_tools:
+                options.allowed_tools = allowed_tools
+            if disallowed_tools:
+                options.disallowed_tools = disallowed_tools
 
-                # Set permission mode (needed for tool execution in API context)
-                if permission_mode:
-                    options.permission_mode = permission_mode
+            # Set permission mode (needed for tool execution in API context)
+            if permission_mode:
+                options.permission_mode = permission_mode
 
-                # Handle session continuity
-                if continue_session:
-                    options.continue_session = True
-                elif session_id:
-                    options.resume = session_id
+            # Run the query and yield messages, enforcing the overall timeout.
+            # asyncio.timeout() needs Python 3.11, so bound each step with
+            # wait_for() against a single deadline.
+            loop = asyncio.get_running_loop()
+            deadline = loop.time() + self.timeout
+            sdk_stream = query(prompt=prompt, options=options)
+            while True:
+                remaining = deadline - loop.time()
+                if remaining <= 0:
+                    raise _QueryTimeout()
+                try:
+                    message = await asyncio.wait_for(sdk_stream.__anext__(), timeout=remaining)
+                except StopAsyncIteration:
+                    break
+                except asyncio.TimeoutError:
+                    # Only our deadline counts; a TimeoutError raised inside
+                    # the SDK well before it is an ordinary SDK error. (The
+                    # event loop may fire timers up to clock_resolution early.)
+                    if deadline - loop.time() > 0.5:
+                        raise
+                    raise _QueryTimeout() from None
 
-                # Run the query and yield messages
-                async for message in query(prompt=prompt, options=options):
-                    # Debug logging
-                    logger.debug(f"Raw SDK message type: {type(message)}")
-                    logger.debug(f"Raw SDK message: {message}")
+                # Debug logging
+                logger.debug(f"Raw SDK message type: {type(message)}")
+                logger.debug(f"Raw SDK message: {message}")
 
-                    # Convert message object to dict if needed
-                    if hasattr(message, "__dict__") and not isinstance(message, dict):
-                        # Convert object to dict for consistent handling
-                        message_dict = {}
+                # Convert message object to dict if needed
+                if hasattr(message, "__dict__") and not isinstance(message, dict):
+                    # Convert object to dict for consistent handling
+                    message_dict = {}
 
-                        # Get all attributes from the object
-                        for attr_name in dir(message):
-                            if not attr_name.startswith("_"):  # Skip private attributes
-                                try:
-                                    attr_value = getattr(message, attr_name)
-                                    if not callable(attr_value):  # Skip methods
-                                        message_dict[attr_name] = attr_value
-                                except:
-                                    pass
+                    # Get all attributes from the object
+                    for attr_name in dir(message):
+                        if not attr_name.startswith("_"):  # Skip private attributes
+                            try:
+                                attr_value = getattr(message, attr_name)
+                                if not callable(attr_value):  # Skip methods
+                                    message_dict[attr_name] = attr_value
+                            except:
+                                pass
 
-                        logger.debug(f"Converted message dict: {message_dict}")
-                        yield message_dict
-                    else:
-                        yield message
+                    logger.debug(f"Converted message dict: {message_dict}")
+                    yield message_dict
+                else:
+                    yield message
 
-            finally:
-                # Restore original environment (if we changed anything)
-                if original_env:
-                    for key, original_value in original_env.items():
-                        if original_value is None:
-                            os.environ.pop(key, None)
-                        else:
-                            os.environ[key] = original_value
+        except _QueryTimeout:
+            logger.error(f"Claude Agent SDK query timed out after {self.timeout:g}s")
+            # Close the SDK generator now so the CLI subprocess is terminated
+            # before the error is reported.
+            await self._close_sdk_stream(sdk_stream)
+            sdk_stream = None
+            yield {
+                "type": "result",
+                "subtype": "error_during_execution",
+                "is_error": True,
+                "error_message": f"Claude Agent SDK query timed out after {self.timeout:g} seconds",
+            }
 
         except Exception as e:
             logger.error(f"Claude Agent SDK error: {e}")
@@ -198,6 +232,37 @@ class ClaudeCodeCLI:
                 "is_error": True,
                 "error_message": str(e),
             }
+
+        finally:
+            # Also runs when the caller stops iterating early (aclose).
+            await self._close_sdk_stream(sdk_stream)
+            if system_prompt_file:
+                try:
+                    os.unlink(system_prompt_file)
+                except OSError as e:
+                    logger.warning(f"Failed to remove system prompt file {system_prompt_file}: {e}")
+
+    @staticmethod
+    def _write_system_prompt_file(system_prompt: str) -> str:
+        """Write a system prompt to a private temp file and return its path."""
+        fd, path = tempfile.mkstemp(prefix="claude_system_prompt_", suffix=".txt")
+        try:
+            with os.fdopen(fd, "w", encoding="utf-8") as f:
+                f.write(system_prompt)
+        except BaseException:
+            os.unlink(path)
+            raise
+        return path
+
+    @staticmethod
+    async def _close_sdk_stream(sdk_stream) -> None:
+        """Close the SDK query generator, which terminates the CLI subprocess."""
+        if sdk_stream is None:
+            return
+        try:
+            await sdk_stream.aclose()
+        except Exception as e:
+            logger.warning(f"Error closing Claude Agent SDK stream: {e}")
 
     def parse_claude_message(self, messages: List[Dict[str, Any]]) -> Optional[str]:
         """Extract the assistant message from Claude Agent SDK messages.

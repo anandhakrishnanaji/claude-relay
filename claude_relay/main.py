@@ -10,6 +10,9 @@ from contextlib import asynccontextmanager
 from fastapi import FastAPI, HTTPException, Request, Depends
 from fastapi.security import HTTPAuthorizationCredentials
 from fastapi.middleware.cors import CORSMiddleware
+from starlette.datastructures import Headers
+from starlette.middleware.trustedhost import TrustedHostMiddleware
+from starlette.responses import PlainTextResponse
 from fastapi.responses import StreamingResponse, JSONResponse, HTMLResponse
 from fastapi.exceptions import RequestValidationError
 from pydantic import ValidationError
@@ -41,6 +44,7 @@ from claude_relay.models import (
 )
 from claude_relay.claude_cli import ClaudeCodeCLI
 from claude_relay.message_adapter import MessageAdapter
+from claude_relay import usage as sdk_usage
 from claude_relay.auth import (
     verify_api_key,
     security,
@@ -60,8 +64,10 @@ from datetime import datetime, timezone
 
 from claude_relay import constants
 from claude_relay.constants import (
+    ALLOWED_HOSTS,
     ANTHROPIC_MODELS_URL,
     ANTHROPIC_VERSION,
+    CORS_ORIGINS,
     CLAUDE_MODELS,
     CLAUDE_TOOLS,
     DEFAULT_ALLOWED_TOOLS,
@@ -314,8 +320,9 @@ async def lifespan(app: FastAPI):
         logger.debug(f"   DEBUG_MODE: {DEBUG_MODE}")
         logger.debug(f"   VERBOSE: {VERBOSE}")
         logger.debug(f"   PORT: {os.getenv('PORT', '8000')}")
-        cors_origins_val = os.getenv("CORS_ORIGINS", '["*"]')
-        logger.debug(f"   CORS_ORIGINS: {cors_origins_val}")
+        logger.debug(f"   CORS_ORIGINS: {CORS_ORIGINS}")
+        logger.debug(f"   ALLOWED_HOSTS: {','.join(ALLOWED_HOSTS)}")
+        logger.debug(f"   ALLOW_TOOLS: {constants.ALLOW_TOOLS}")
         logger.debug(f"   MAX_TIMEOUT: {os.getenv('MAX_TIMEOUT', '600000')}")
         logger.debug(f"   CLAUDE_CWD: {os.getenv('CLAUDE_CWD', 'Not set')}")
         logger.debug("🔧 Available endpoints:")
@@ -352,15 +359,57 @@ app = FastAPI(
     lifespan=lifespan,
 )
 
-# Configure CORS
-cors_origins = json.loads(os.getenv("CORS_ORIGINS", '["*"]'))
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=cors_origins,
-    allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
-)
+
+class HostAllowListMiddleware(TrustedHostMiddleware):
+    """TrustedHostMiddleware that also handles IPv6 literals such as "[::1]:8787".
+
+    Starlette strips the port with split(":")[0], which turns any IPv6 Host into "[".
+    """
+
+    async def __call__(self, scope, receive, send):
+        if self.allow_any or scope["type"] not in ("http", "websocket"):
+            await self.app(scope, receive, send)
+            return
+
+        host = Headers(scope=scope).get("host", "")
+        if host.startswith("["):
+            host = host[: host.find("]") + 1]  # "[::1]:8787" -> "[::1]"
+        else:
+            host = host.split(":")[0]
+
+        for pattern in self.allowed_hosts:
+            if host == pattern or (pattern.startswith("*") and host.endswith(pattern[1:])):
+                await self.app(scope, receive, send)
+                return
+        await PlainTextResponse("Invalid host header", status_code=400)(scope, receive, send)
+
+
+def add_security_middleware(app: FastAPI, cors_origins: List[str], allowed_hosts: List[str]):
+    """Add CORS and Host allow-list middleware.
+
+    The Host check runs first (outermost) and guards against DNS rebinding,
+    which CORS alone can't stop.
+    """
+    # Credentials with a wildcard would make Starlette echo any Origin back
+    allow_credentials = "*" not in cors_origins
+    if not allow_credentials:
+        logger.warning(
+            "CORS_ORIGINS contains '*': any website can call this server from a browser; "
+            "credentials disabled"
+        )
+    app.add_middleware(
+        CORSMiddleware,
+        allow_origins=cors_origins,
+        allow_credentials=allow_credentials,
+        allow_methods=["*"],
+        allow_headers=["*"],
+    )
+    if "*" in allowed_hosts:
+        logger.warning("ALLOWED_HOSTS contains '*': Host header check disabled")
+    app.add_middleware(HostAllowListMiddleware, allowed_hosts=allowed_hosts)
+
+
+add_security_middleware(app, CORS_ORIGINS, ALLOWED_HOSTS)
 
 # Add rate limiting error handler
 if limiter:
@@ -577,6 +626,10 @@ async def generate_streaming_response(
             # Disable all tools by using CLAUDE_TOOLS constant
             claude_options["disallowed_tools"] = CLAUDE_TOOLS
             claude_options["max_turns"] = 1  # Single turn for Q&A
+            # Drop X-Claude-Allowed-Tools / X-Claude-Permission-Mode so headers
+            # can't re-enable tools that enable_tools/ALLOW_TOOLS left off
+            claude_options.pop("allowed_tools", None)
+            claude_options.pop("permission_mode", None)
             logger.info("Tools disabled (default behavior for OpenAI compatibility)")
         else:
             # Enable tools - use default safe subset (Read, Glob, Grep, Bash, Write, Edit)
@@ -725,21 +778,25 @@ async def generate_streaming_response(
         # Prepare usage data if requested
         usage_data = None
         if request.stream_options and request.stream_options.include_usage:
-            # Estimate token usage based on prompt and completion
+            # Real usage from the SDK result message; estimate only if it has none
             completion_text = assistant_content or ""
-            token_usage = claude_cli.estimate_token_usage(prompt, completion_text, request.model)
+            estimate = claude_cli.estimate_token_usage(prompt, completion_text, request.model)
             usage_data = Usage(
-                prompt_tokens=token_usage["prompt_tokens"],
-                completion_tokens=token_usage["completion_tokens"],
-                total_tokens=token_usage["total_tokens"],
+                **sdk_usage.openai_usage_counts(
+                    chunks_buffer, estimate["prompt_tokens"], estimate["completion_tokens"]
+                )
             )
-            logger.debug(f"Estimated usage: {usage_data}")
+            logger.debug(f"Usage: {usage_data}")
 
         # Send final chunk with finish reason and optionally usage data
         final_chunk = ChatCompletionStreamResponse(
             id=request_id,
             model=request.model,
-            choices=[StreamChoice(index=0, delta={}, finish_reason="stop")],
+            choices=[
+                StreamChoice(
+                    index=0, delta={}, finish_reason=sdk_usage.openai_finish_reason(chunks_buffer)
+                )
+            ],
             usage=usage_data,
         )
         yield f"data: {final_chunk.model_dump_json()}\n\n"
@@ -749,6 +806,12 @@ async def generate_streaming_response(
         logger.error(f"Streaming error: {e}")
         error_chunk = {"error": {"message": str(e), "type": "streaming_error"}}
         yield f"data: {json.dumps(error_chunk)}\n\n"
+
+
+TOOLS_DISABLED_MESSAGE = (
+    "enable_tools is disabled on this server. Set ALLOW_TOOLS=true on the server to allow "
+    "requests to run Claude Code tools (Bash, Write, Edit) with permissions bypassed."
+)
 
 
 @app.post("/v1/chat/completions")
@@ -761,6 +824,19 @@ async def chat_completions(
     """OpenAI-compatible chat completions endpoint."""
     # Check FastAPI API key if configured
     await verify_api_key(request, credentials)
+
+    # Covers the streaming path too, which reads request_body.enable_tools later
+    if request_body.enable_tools and not constants.ALLOW_TOOLS:
+        return JSONResponse(
+            status_code=403,
+            content={
+                "error": {
+                    "message": TOOLS_DISABLED_MESSAGE,
+                    "type": "permission_error",
+                    "code": "tools_disabled",
+                }
+            },
+        )
 
     # Validate Claude Code authentication
     auth_valid, auth_info = validate_claude_code_auth()
@@ -839,6 +915,10 @@ async def chat_completions(
                 # Disable all tools by using CLAUDE_TOOLS constant
                 claude_options["disallowed_tools"] = CLAUDE_TOOLS
                 claude_options["max_turns"] = 1  # Single turn for Q&A
+                # Drop X-Claude-Allowed-Tools / X-Claude-Permission-Mode so headers
+                # can't re-enable tools that enable_tools/ALLOW_TOOLS left off
+                claude_options.pop("allowed_tools", None)
+                claude_options.pop("permission_mode", None)
                 logger.info("Tools disabled (default behavior for OpenAI compatibility)")
             else:
                 # Enable tools - use default safe subset (Read, Glob, Grep, Bash, Write, Edit)
@@ -861,6 +941,10 @@ async def chat_completions(
             ):
                 chunks.append(chunk)
 
+            sdk_error = sdk_usage.result_error(chunks)
+            if sdk_error:
+                raise HTTPException(status_code=sdk_error["status"], detail=sdk_error["message"])
+
             # Extract assistant message
             raw_assistant_content = claude_cli.parse_claude_message(chunks)
 
@@ -875,9 +959,12 @@ async def chat_completions(
                 assistant_message = Message(role="assistant", content=assistant_content)
                 session_manager.add_assistant_response(actual_session_id, assistant_message)
 
-            # Estimate tokens (rough approximation)
-            prompt_tokens = MessageAdapter.estimate_tokens(prompt)
-            completion_tokens = MessageAdapter.estimate_tokens(assistant_content)
+            # Real usage from the SDK result message; estimate only if it has none
+            token_usage = sdk_usage.openai_usage_counts(
+                chunks,
+                MessageAdapter.estimate_tokens(prompt),
+                MessageAdapter.estimate_tokens(assistant_content),
+            )
 
             # Create response
             response = ChatCompletionResponse(
@@ -887,14 +974,10 @@ async def chat_completions(
                     Choice(
                         index=0,
                         message=Message(role="assistant", content=assistant_content),
-                        finish_reason="stop",
+                        finish_reason=sdk_usage.openai_finish_reason(chunks),
                     )
                 ],
-                usage=Usage(
-                    prompt_tokens=prompt_tokens,
-                    completion_tokens=completion_tokens,
-                    total_tokens=prompt_tokens + completion_tokens,
-                ),
+                usage=Usage(**token_usage),
             )
 
             return response
@@ -920,6 +1003,15 @@ async def anthropic_messages(
     """
     # Check FastAPI API key if configured
     await verify_api_key(request, credentials)
+
+    if request_body.enable_tools and not constants.ALLOW_TOOLS:
+        return JSONResponse(
+            status_code=403,
+            content={
+                "type": "error",
+                "error": {"type": "permission_error", "message": TOOLS_DISABLED_MESSAGE},
+            },
+        )
 
     # Validate Claude Code authentication
     auth_valid, auth_info = validate_claude_code_auth()
@@ -978,6 +1070,10 @@ async def anthropic_messages(
         ):
             chunks.append(chunk)
 
+        sdk_error = sdk_usage.result_error(chunks)
+        if sdk_error:
+            raise HTTPException(status_code=sdk_error["status"], detail=sdk_error["message"])
+
         # Extract assistant message
         raw_assistant_content = claude_cli.parse_claude_message(chunks)
 
@@ -987,19 +1083,22 @@ async def anthropic_messages(
         # Filter out tool usage and thinking blocks
         assistant_content = MessageAdapter.filter_content(raw_assistant_content)
 
-        # Estimate tokens
-        prompt_tokens = MessageAdapter.estimate_tokens(prompt)
-        completion_tokens = MessageAdapter.estimate_tokens(assistant_content)
+        # Real usage from the SDK result message; estimate only if it has none
+        real_usage = sdk_usage.extract_usage(chunks)
+        if real_usage:
+            anthropic_usage = AnthropicUsage(**real_usage)
+        else:
+            anthropic_usage = AnthropicUsage(
+                input_tokens=MessageAdapter.estimate_tokens(prompt),
+                output_tokens=MessageAdapter.estimate_tokens(assistant_content),
+            )
 
         # Create Anthropic-format response
         response = AnthropicMessagesResponse(
             model=request_body.model,
             content=[AnthropicTextBlock(text=assistant_content)],
-            stop_reason="end_turn",
-            usage=AnthropicUsage(
-                input_tokens=prompt_tokens,
-                output_tokens=completion_tokens,
-            ),
+            stop_reason=sdk_usage.anthropic_stop_reason(chunks),
+            usage=anthropic_usage,
         )
 
         return response

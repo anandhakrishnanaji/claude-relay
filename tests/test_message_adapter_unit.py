@@ -46,8 +46,8 @@ class TestMessagesToPrompt:
         assert system == "You are a helpful assistant."
         assert "Human: Hello" in prompt
 
-    def test_multiple_system_messages_uses_last(self):
-        """Multiple system messages use the last one."""
+    def test_multiple_system_messages_are_joined(self):
+        """Multiple system messages are all kept, in order."""
         messages = [
             Message(role="system", content="First system message"),
             Message(role="user", content="Hello"),
@@ -55,7 +55,54 @@ class TestMessagesToPrompt:
         ]
         prompt, system = MessageAdapter.messages_to_prompt(messages)
 
-        assert system == "Second system message"
+        assert system == "First system message\n\nSecond system message"
+
+    def test_developer_message_becomes_system_prompt(self):
+        """The developer role is treated as system."""
+        messages = [
+            Message(role="system", content="Be brief."),
+            Message(role="developer", content="Answer in French."),
+            Message(role="user", content="Hello"),
+        ]
+        prompt, system = MessageAdapter.messages_to_prompt(messages)
+
+        assert system == "Be brief.\n\nAnswer in French."
+        assert "Answer in French" not in prompt
+
+    def test_tool_call_round_trip(self):
+        """Assistant tool calls and tool results appear in the prompt."""
+        messages = [
+            Message(role="user", content="Weather in Paris?"),
+            Message(
+                role="assistant",
+                content=None,
+                tool_calls=[
+                    {
+                        "id": "call_1",
+                        "type": "function",
+                        "function": {"name": "get_weather", "arguments": '{"city": "Paris"}'},
+                    }
+                ],
+            ),
+            Message(role="tool", tool_call_id="call_1", content="Sunny, 21C"),
+        ]
+        prompt, system = MessageAdapter.messages_to_prompt(messages)
+
+        assert 'Assistant: Tool call: get_weather({"city": "Paris"})' in prompt
+        assert "Human: Tool result (call_1): Sunny, 21C" in prompt
+        # A trailing tool result is the human side's turn, so no "Please continue"
+        assert "Please continue" not in prompt
+
+    def test_unvalidated_none_content_does_not_crash(self):
+        """Messages built without validation and None content still render."""
+        messages = [
+            Message.model_construct(role="developer", content=None),
+            Message.model_construct(role="user", content=None),
+        ]
+        prompt, system = MessageAdapter.messages_to_prompt(messages)
+
+        assert prompt == "Human: "
+        assert system is None
 
     def test_last_message_not_user_adds_continue(self):
         """If last message isn't from user, adds 'Please continue'."""
@@ -294,6 +341,10 @@ class TestEstimateTokens:
         """Empty text returns 0 tokens."""
         result = MessageAdapter.estimate_tokens("")
         assert result == 0
+
+    def test_none_text(self):
+        """None text returns 0 tokens instead of crashing."""
+        assert MessageAdapter.estimate_tokens(None) == 0
 
     def test_long_text(self):
         """Longer text estimation."""

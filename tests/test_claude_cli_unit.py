@@ -473,6 +473,23 @@ class TestClaudeCodeCLIVerifyCLI:
             assert result is True
 
     @pytest.mark.asyncio
+    async def test_verify_cli_passes_env_via_options(self, cli_instance):
+        """verify_cli passes auth env vars via options.env."""
+        cli_instance.claude_env_vars = {"ANTHROPIC_API_KEY": "test-key"}
+        captured_options = []
+        env_before = dict(os.environ)
+
+        async def mock_query(prompt, options):
+            captured_options.append(options)
+            yield {"type": "assistant"}
+
+        with patch("claude_relay.claude_cli.query", mock_query):
+            assert await cli_instance.verify_cli() is True
+
+        assert captured_options[0].env == {"ANTHROPIC_API_KEY": "test-key"}
+        assert dict(os.environ) == env_before
+
+    @pytest.mark.asyncio
     async def test_verify_cli_no_messages(self, cli_instance):
         """verify_cli returns False when no messages returned."""
 
@@ -620,38 +637,6 @@ class TestClaudeCodeCLIRunCompletion:
             assert captured_options[0].permission_mode == "acceptEdits"
 
     @pytest.mark.asyncio
-    async def test_run_completion_continue_session(self, cli_instance):
-        """run_completion sets continue_session option."""
-        mock_message = {"type": "assistant"}
-        captured_options = []
-
-        async def mock_query(prompt, options):
-            captured_options.append(options)
-            yield mock_message
-
-        with patch("claude_relay.claude_cli.query", mock_query):
-            async for _ in cli_instance.run_completion("Hello", continue_session=True):
-                pass
-
-            assert captured_options[0].continue_session is True
-
-    @pytest.mark.asyncio
-    async def test_run_completion_resume_session(self, cli_instance):
-        """run_completion sets resume option for session_id."""
-        mock_message = {"type": "assistant"}
-        captured_options = []
-
-        async def mock_query(prompt, options):
-            captured_options.append(options)
-            yield mock_message
-
-        with patch("claude_relay.claude_cli.query", mock_query):
-            async for _ in cli_instance.run_completion("Hello", session_id="sess-123"):
-                pass
-
-            assert captured_options[0].resume == "sess-123"
-
-    @pytest.mark.asyncio
     async def test_run_completion_converts_objects_to_dicts(self, cli_instance):
         """run_completion converts message objects to dicts."""
         # Create a mock object with attributes
@@ -692,28 +677,162 @@ class TestClaudeCodeCLIRunCompletion:
             assert "SDK failed" in messages[0]["error_message"]
 
     @pytest.mark.asyncio
-    async def test_run_completion_restores_env_vars(self, cli_instance):
-        """run_completion restores environment variables after execution."""
-        # Set an env var that will be modified
-        original_key = os.environ.get("ANTHROPIC_API_KEY")
+    async def test_run_completion_passes_env_via_options(self, cli_instance):
+        """run_completion passes auth env vars via options.env, not os.environ."""
+        captured_options = []
+        env_during_query = []
+        env_before = dict(os.environ)
 
-        mock_message = {"type": "assistant"}
-
-        async def mock_query(*args, **kwargs):
-            yield mock_message
+        async def mock_query(prompt, options):
+            captured_options.append(options)
+            env_during_query.append(dict(os.environ))
+            yield {"type": "assistant"}
 
         with patch("claude_relay.claude_cli.query", mock_query):
             async for _ in cli_instance.run_completion("Hello"):
                 pass
 
-        # Env should be restored
-        if original_key is None:
-            assert (
-                "ANTHROPIC_API_KEY" not in os.environ
-                or os.environ.get("ANTHROPIC_API_KEY") == original_key
-            )
-        else:
-            assert os.environ.get("ANTHROPIC_API_KEY") == original_key
+        assert captured_options[0].env == {"ANTHROPIC_API_KEY": "test-key"}
+        # os.environ is untouched, both during and after the query
+        assert env_during_query[0] == env_before
+        assert dict(os.environ) == env_before
+
+    @pytest.mark.asyncio
+    async def test_run_completion_timeout_yields_error_and_closes(self, cli_instance):
+        """run_completion yields a timeout error and closes the SDK generator."""
+        import asyncio
+
+        cli_instance.timeout = 0.05
+        state = {"closed": False}
+
+        async def mock_query(prompt, options):
+            try:
+                yield {"type": "assistant"}
+                await asyncio.sleep(10)
+                yield {"type": "never"}
+            finally:
+                state["closed"] = True
+
+        with patch("claude_relay.claude_cli.query", mock_query):
+            messages = []
+            async for msg in cli_instance.run_completion("Hello"):
+                messages.append(msg)
+
+        assert messages[0] == {"type": "assistant"}
+        assert len(messages) == 2
+        assert messages[1]["type"] == "result"
+        assert messages[1]["subtype"] == "error_during_execution"
+        assert messages[1]["is_error"] is True
+        assert "timed out" in messages[1]["error_message"]
+        assert state["closed"] is True
+
+    @pytest.mark.asyncio
+    async def test_run_completion_timeout_covers_whole_iteration(self, cli_instance):
+        """The timeout is a deadline for the whole query, not per message."""
+        import asyncio
+
+        cli_instance.timeout = 0.2
+
+        async def mock_query(prompt, options):
+            # Each message arrives well within the timeout, but the total exceeds it
+            for _ in range(20):
+                await asyncio.sleep(0.05)
+                yield {"type": "assistant"}
+
+        with patch("claude_relay.claude_cli.query", mock_query):
+            messages = []
+            async for msg in cli_instance.run_completion("Hello"):
+                messages.append(msg)
+
+        assert len(messages) < 20
+        assert messages[-1]["is_error"] is True
+        assert "timed out" in messages[-1]["error_message"]
+
+    @pytest.mark.asyncio
+    async def test_run_completion_closes_sdk_stream_on_early_exit(self, cli_instance):
+        """Closing run_completion early also closes the SDK generator."""
+        state = {"closed": False}
+
+        async def mock_query(prompt, options):
+            try:
+                yield {"type": "assistant"}
+                yield {"type": "assistant"}
+            finally:
+                state["closed"] = True
+
+        with patch("claude_relay.claude_cli.query", mock_query):
+            gen = cli_instance.run_completion("Hello")
+            await gen.__anext__()
+            await gen.aclose()
+
+        assert state["closed"] is True
+
+    @pytest.mark.asyncio
+    async def test_run_completion_large_system_prompt_uses_file(self, cli_instance):
+        """A system prompt above the argv-safe threshold is passed as a file."""
+        from claude_relay.claude_cli import SYSTEM_PROMPT_FILE_THRESHOLD_BYTES
+
+        big_prompt = "é" * SYSTEM_PROMPT_FILE_THRESHOLD_BYTES  # 2 UTF-8 bytes each
+        captured = []
+
+        async def mock_query(prompt, options):
+            sp = options.system_prompt
+            with open(sp["path"], encoding="utf-8") as f:
+                captured.append((sp, f.read()))
+            yield {"type": "assistant"}
+
+        with patch("claude_relay.claude_cli.query", mock_query):
+            async for _ in cli_instance.run_completion("Hello", system_prompt=big_prompt):
+                pass
+
+        sp, contents = captured[0]
+        assert sp["type"] == "file"
+        assert set(sp) == {"type", "path"}
+        assert contents == big_prompt
+        # Temp file is removed afterwards
+        assert not os.path.exists(sp["path"])
+
+    @pytest.mark.asyncio
+    async def test_run_completion_large_system_prompt_file_removed_on_error(
+        self, cli_instance
+    ):
+        """The system prompt temp file is removed even when the SDK fails."""
+        from claude_relay.claude_cli import SYSTEM_PROMPT_FILE_THRESHOLD_BYTES
+
+        paths = []
+
+        async def mock_query(prompt, options):
+            paths.append(options.system_prompt["path"])
+            raise RuntimeError("SDK failed")
+            yield  # Make it a generator
+
+        with patch("claude_relay.claude_cli.query", mock_query):
+            messages = []
+            async for msg in cli_instance.run_completion(
+                "Hello", system_prompt="x" * (SYSTEM_PROMPT_FILE_THRESHOLD_BYTES + 1)
+            ):
+                messages.append(msg)
+
+        assert messages[0]["is_error"] is True
+        assert not os.path.exists(paths[0])
+
+    @pytest.mark.asyncio
+    async def test_run_completion_small_system_prompt_stays_string(self, cli_instance):
+        """A system prompt at or below the threshold is passed as a plain string."""
+        from claude_relay.claude_cli import SYSTEM_PROMPT_FILE_THRESHOLD_BYTES
+
+        prompt = "x" * SYSTEM_PROMPT_FILE_THRESHOLD_BYTES
+        captured_options = []
+
+        async def mock_query(prompt, options):
+            captured_options.append(options)
+            yield {"type": "assistant"}
+
+        with patch("claude_relay.claude_cli.query", mock_query):
+            async for _ in cli_instance.run_completion("Hello", system_prompt=prompt):
+                pass
+
+        assert captured_options[0].system_prompt == prompt
 
 
 class TestClaudeCodeCLICleanupException:

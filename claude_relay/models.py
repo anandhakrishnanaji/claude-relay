@@ -1,6 +1,7 @@
 from typing import List, Optional, Dict, Any, Union, Literal
-from pydantic import BaseModel, Field, field_validator, model_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 from datetime import datetime
+import json
 import uuid
 import logging
 
@@ -19,33 +20,131 @@ def get_default_model():
     return constants.RESOLVED_DEFAULT_MODEL or constants.DEFAULT_MODEL_FALLBACK
 
 
-class ContentPart(BaseModel):
-    """Content part for multimodal messages (OpenAI format)."""
+def _render_tool_call(name: Optional[str], arguments: Any) -> str:
+    """Render a tool call as one readable line, e.g. `Tool call: get_weather({"city": "Paris"})`."""
+    if arguments is None or arguments == "":
+        args = ""
+    elif isinstance(arguments, str):
+        args = arguments
+    else:
+        try:
+            args = json.dumps(arguments, ensure_ascii=False)
+        except (TypeError, ValueError):
+            args = str(arguments)
+    return f"Tool call: {name or 'unknown'}({args})"
 
-    type: Literal["text"]
-    text: str
+
+def _render_tool_result(label: Optional[str], text: str, is_error: bool = False) -> str:
+    """Render a tool result, e.g. `Tool result (get_weather): Sunny`."""
+    prefix = "Tool error" if is_error else "Tool result"
+    return f"{prefix} ({label}): {text}" if label else f"{prefix}: {text}"
+
+
+def content_to_text(content: Any, dropped: Optional[List[str]] = None) -> str:
+    """
+    Flatten OpenAI/Anthropic message content to plain text.
+
+    Keeps text parts, renders tool_use/tool_result parts as readable lines and
+    drops images, audio, files and other binary parts. Dropped part types are
+    appended to `dropped` so the caller can log them.
+    """
+    if content is None:
+        return ""
+    if isinstance(content, str):
+        return content
+    if isinstance(content, (BaseModel, dict)):
+        content = [content]
+    if not isinstance(content, list):
+        return str(content)
+
+    text_parts = []
+    for part in content:
+        if isinstance(part, str):
+            text_parts.append(part)
+            continue
+        if isinstance(part, BaseModel):
+            part = part.model_dump()
+        if not isinstance(part, dict):
+            continue
+
+        part_type = part.get("type")
+        if part_type in ("text", "input_text", "output_text"):
+            text_parts.append(part.get("text") or "")
+        elif part_type == "refusal":
+            text_parts.append(part.get("refusal") or "")
+        elif part_type == "tool_use":
+            text_parts.append(_render_tool_call(part.get("name"), part.get("input")))
+        elif part_type == "tool_result":
+            label = part.get("name") or part.get("tool_use_id")
+            inner = content_to_text(part.get("content"), dropped)
+            text_parts.append(_render_tool_result(label, inner, bool(part.get("is_error"))))
+        elif dropped is not None:
+            dropped.append(str(part_type))
+
+    # Join all text parts with newlines
+    return "\n".join(text_parts)
+
+
+class ContentPart(BaseModel):
+    """
+    Content part for multimodal messages (OpenAI format).
+
+    Any part type is accepted (image_url, input_audio, file, tool_result, ...)
+    so agentic clients don't get a 422; Message keeps only the text.
+    """
+
+    model_config = ConfigDict(extra="allow")
+
+    type: str
+    text: Optional[str] = None
 
 
 class Message(BaseModel):
-    role: Literal["system", "user", "assistant"]
-    content: Union[str, List[ContentPart]]
+    role: Literal["system", "developer", "user", "assistant", "tool", "function"]
+    content: Optional[Union[str, List[ContentPart]]] = None
     name: Optional[str] = None
+    # Input-only fields from agentic clients: they are rendered into `content`
+    # during validation and left out of responses.
+    tool_calls: Optional[List[Dict[str, Any]]] = Field(default=None, exclude=True)
+    tool_call_id: Optional[str] = Field(default=None, exclude=True)
+    function_call: Optional[Dict[str, Any]] = Field(default=None, exclude=True)
+
+    @field_validator("role", mode="before")
+    @classmethod
+    def normalize_role(cls, v):
+        """Newer OpenAI SDKs send `developer` instead of `system`."""
+        return "system" if v == "developer" else v
 
     @model_validator(mode="after")
     def normalize_content(self):
-        """Convert array content to string for Claude Code compatibility."""
-        if isinstance(self.content, list):
-            # Extract text from content parts and concatenate
-            text_parts = []
-            for part in self.content:
-                if isinstance(part, ContentPart) and part.type == "text":
-                    text_parts.append(part.text)
-                elif isinstance(part, dict) and part.get("type") == "text":
-                    text_parts.append(part.get("text", ""))
+        """Convert content to a plain string for Claude Code compatibility."""
+        dropped: List[str] = []
+        text = content_to_text(self.content, dropped)
+        if dropped:
+            logger.info(
+                f"Dropped unsupported content parts from {self.role} message: {', '.join(dropped)}"
+            )
 
-            # Join all text parts with newlines
-            self.content = "\n".join(text_parts) if text_parts else ""
+        if self.role in ("tool", "function"):
+            text = _render_tool_result(self.name or self.tool_call_id, text)
 
+        # Assistant tool calls (and the legacy function_call) become readable lines
+        calls = list(self.tool_calls or [])
+        if self.function_call:
+            calls.append({"function": self.function_call})
+        call_lines = []
+        for call in calls:
+            function = call.get("function") or {}
+            call_lines.append(
+                _render_tool_call(
+                    function.get("name") or call.get("name"),
+                    function.get("arguments", call.get("arguments")),
+                )
+            )
+        if call_lines:
+            text = "\n".join([text, *call_lines] if text else call_lines)
+
+        self.content = text
         return self
 
 
@@ -427,11 +526,24 @@ class AnthropicTextBlock(BaseModel):
     text: str
 
 
+class AnthropicContentBlock(BaseModel):
+    """
+    Any other Anthropic content block (tool_use, tool_result, image, document, ...).
+
+    Accepted so tool-using clients don't get a 422; to_openai_messages renders
+    tool blocks as text and drops binary ones.
+    """
+
+    model_config = ConfigDict(extra="allow")
+
+    type: str
+
+
 class AnthropicMessage(BaseModel):
     """Anthropic message format."""
 
     role: Literal["user", "assistant"]
-    content: Union[str, List[AnthropicTextBlock]]
+    content: Union[str, List[Union[AnthropicTextBlock, AnthropicContentBlock]]]
 
 
 class AnthropicMessagesRequest(BaseModel):
@@ -464,13 +576,13 @@ class AnthropicMessagesRequest(BaseModel):
         """Convert Anthropic messages to OpenAI format."""
         result = []
         for msg in self.messages:
-            content = msg.content
-            if isinstance(content, list):
-                # Extract text from content blocks
-                text_parts = [
-                    block.text for block in content if isinstance(block, AnthropicTextBlock)
-                ]
-                content = "\n".join(text_parts)
+            # Keep text and tool blocks as text, drop images and other binary blocks
+            dropped: List[str] = []
+            content = content_to_text(msg.content, dropped)
+            if dropped:
+                logger.info(
+                    f"Dropped unsupported content blocks from {msg.role} message: {', '.join(dropped)}"
+                )
             result.append(Message(role=msg.role, content=content))
         return result
 
@@ -480,6 +592,8 @@ class AnthropicUsage(BaseModel):
 
     input_tokens: int
     output_tokens: int
+    cache_read_input_tokens: Optional[int] = None
+    cache_creation_input_tokens: Optional[int] = None
 
 
 class AnthropicMessagesResponse(BaseModel):
@@ -490,6 +604,8 @@ class AnthropicMessagesResponse(BaseModel):
     role: Literal["assistant"] = "assistant"
     content: List[AnthropicTextBlock]
     model: str
-    stop_reason: Optional[Literal["end_turn", "max_tokens", "stop_sequence"]] = "end_turn"
+    stop_reason: Optional[
+        Literal["end_turn", "max_tokens", "stop_sequence", "tool_use", "pause_turn", "refusal"]
+    ] = "end_turn"
     stop_sequence: Optional[str] = None
     usage: AnthropicUsage

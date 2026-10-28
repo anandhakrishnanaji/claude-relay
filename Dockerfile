@@ -1,30 +1,31 @@
+# Runs as a non-root user without auto-reload: the Claude CLI refuses
+# --dangerously-skip-permissions as root, which tool use needs.
+# Mirrors deploy/Dockerfile.
 FROM python:3.12-slim
 
-# Install system deps (curl for Poetry installer)
-RUN apt-get update && apt-get install -y \
-    curl \
-    && rm -rf /var/lib/apt/lists/*
+ARG UID=1000
+ARG GID=1000
 
-# Install Poetry globally
-RUN curl -sSL https://install.python-poetry.org | python3 -
+COPY --from=ghcr.io/astral-sh/uv:0.9.5 /uv /usr/local/bin/uv
 
-# Add Poetry to PATH
-ENV PATH="/root/.local/bin:${PATH}"
+RUN apt-get update && apt-get install -y --no-install-recommends curl \
+    && rm -rf /var/lib/apt/lists/* \
+    && groupadd -g ${GID} app && useradd -m -u ${UID} -g ${GID} app
 
 # Note: Claude Code CLI is bundled with claude-agent-sdk >= 0.1.8
 # No separate Node.js/npm installation required
-
-# Copy the app code
-COPY . /app
-
-# Set working directory
 WORKDIR /app
+COPY pyproject.toml README.md ./
+COPY claude_relay ./claude_relay
+RUN uv pip install --system --no-cache .
 
-# Install Python dependencies with Poetry
-RUN poetry install --no-root
+USER app
+ENV HOME=/home/app \
+    PORT=8000 \
+    CLAUDE_WRAPPER_HOST=0.0.0.0
 
-# Expose the port (default 8000)
 EXPOSE 8000
+HEALTHCHECK --interval=30s --timeout=5s --retries=3 \
+    CMD curl -fs http://localhost:8000/health || exit 1
 
-# Run the app with Uvicorn (development mode with reload; switch to --no-reload for prod)
-CMD ["poetry", "run", "uvicorn", "claude_relay.main:app", "--host", "0.0.0.0", "--port", "8000", "--reload"]
+CMD ["claude-relay"]

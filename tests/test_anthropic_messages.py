@@ -104,7 +104,7 @@ class TestAnthropicMessagesModels:
 class TestAnthropicMessagesToolGating:
     """Unit tests: /v1/messages passes the right options to Claude Code."""
 
-    def _post(self, payload):
+    def _post(self, payload, allow_tools=False):
         from unittest.mock import patch
         from fastapi.testclient import TestClient
         import claude_relay.main as main
@@ -119,8 +119,11 @@ class TestAnthropicMessagesToolGating:
             patch.object(main, "validate_claude_code_auth", return_value=(True, {})),
             patch.object(main.claude_cli, "run_completion", fake_run_completion),
             patch.object(main.claude_cli, "parse_claude_message", return_value="ok"),
+            patch.object(main.constants, "ALLOW_TOOLS", allow_tools),
         ):
-            response = TestClient(main.app).post("/v1/messages", json=payload)
+            # Host must pass the ALLOWED_HOSTS check (TestClient defaults to "testserver")
+            client = TestClient(main.app, base_url="http://localhost")
+            response = client.post("/v1/messages", json=payload)
         return response, captured
 
     def test_tools_disabled_by_default(self):
@@ -143,7 +146,8 @@ class TestAnthropicMessagesToolGating:
                 "model": "claude-haiku-4-5-20251001",
                 "enable_tools": True,
                 "messages": [{"role": "user", "content": "hi"}],
-            }
+            },
+            allow_tools=True,
         )
         assert response.status_code == 200
         assert opts["allowed_tools"] == DEFAULT_ALLOWED_TOOLS
@@ -162,6 +166,58 @@ class TestAnthropicMessagesToolGating:
         )
         assert response.status_code == 200
         assert opts["system_prompt"] == "Rule one.\n\nRule two."
+
+    def test_tool_use_tool_result_and_image_blocks(self):
+        """Tool-using clients' content blocks are accepted and rendered as text."""
+        response, opts = self._post(
+            {
+                "model": "claude-haiku-4-5-20251001",
+                "messages": [
+                    {
+                        "role": "user",
+                        "content": [
+                            {"type": "text", "text": "What's in this file?"},
+                            {
+                                "type": "image",
+                                "source": {
+                                    "type": "base64",
+                                    "media_type": "image/png",
+                                    "data": "AA",
+                                },
+                            },
+                        ],
+                    },
+                    {
+                        "role": "assistant",
+                        "content": [
+                            {"type": "text", "text": "Reading it."},
+                            {
+                                "type": "tool_use",
+                                "id": "toolu_1",
+                                "name": "read_file",
+                                "input": {"path": "a.txt"},
+                            },
+                        ],
+                    },
+                    {
+                        "role": "user",
+                        "content": [
+                            {
+                                "type": "tool_result",
+                                "tool_use_id": "toolu_1",
+                                "content": [{"type": "text", "text": "hello world"}],
+                            }
+                        ],
+                    },
+                ],
+            }
+        )
+        assert response.status_code == 200
+        prompt = opts["prompt"]
+        assert "What's in this file?" in prompt
+        assert 'Assistant: Reading it.\nTool call: read_file({"path": "a.txt"})' in prompt
+        assert "Tool result (toolu_1): hello world" in prompt
+        assert "base64" not in prompt
 
 
 class TestAnthropicMessagesEndpoint:
