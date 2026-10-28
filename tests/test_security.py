@@ -239,3 +239,36 @@ class TestToolGate:
         assert response.status_code == 200
         assert opts["allowed_tools"] == DEFAULT_ALLOWED_TOOLS
         assert opts["permission_mode"] == "bypassPermissions"
+
+
+class TestMCPGate:
+    """MCP registration/connect launch a client-chosen command, so they need ALLOW_TOOLS."""
+
+    SERVER = {"name": "x", "command": "sh", "args": ["-c", "true"]}
+
+    @pytest.mark.parametrize(
+        "path,payload",
+        [("/v1/mcp/servers", SERVER), ("/v1/mcp/connect", {"server_name": "x"})],
+    )
+    def test_refused_without_allow_tools(self, path, payload):
+        with (
+            patch.object(main.constants, "ALLOW_TOOLS", False),
+            patch.object(main.mcp_client, "register_server") as register,
+            patch.object(main.mcp_client, "connect_server") as connect,
+        ):
+            response = TestClient(main.app, base_url="http://localhost").post(path, json=payload)
+        assert response.status_code == 403
+        register.assert_not_called()
+        connect.assert_not_called()
+
+    def test_register_allowed_with_allow_tools(self):
+        with (
+            patch.object(main.constants, "ALLOW_TOOLS", True),
+            patch.object(main.mcp_client, "is_available", return_value=True),
+            patch.object(main.mcp_client, "register_server") as register,
+        ):
+            response = TestClient(main.app, base_url="http://localhost").post(
+                "/v1/mcp/servers", json=self.SERVER
+            )
+        assert response.status_code == 200
+        register.assert_called_once()

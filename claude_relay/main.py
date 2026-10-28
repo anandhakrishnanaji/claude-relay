@@ -2019,6 +2019,16 @@ async def get_tool_stats(
 # MCP (Model Context Protocol) Management Endpoints
 
 
+def require_mcp_allowed():
+    """Registering/connecting an MCP server spawns a client-chosen command, so gate it like tools."""
+    if not constants.ALLOW_TOOLS:
+        raise HTTPException(
+            status_code=403,
+            detail="MCP server registration is disabled on this server. Set ALLOW_TOOLS=true "
+            "on the server to let clients register and launch MCP server commands.",
+        )
+
+
 @app.get("/v1/mcp/servers", response_model=MCPServersListResponse)
 @rate_limit_endpoint("general")
 async def list_mcp_servers(
@@ -2064,6 +2074,7 @@ async def register_mcp_server(
 ):
     """Register a new MCP server."""
     await verify_api_key(request, credentials)
+    require_mcp_allowed()
 
     if not mcp_client.is_available():
         raise HTTPException(
@@ -2093,6 +2104,7 @@ async def connect_mcp_server(
 ):
     """Connect to a registered MCP server."""
     await verify_api_key(request, credentials)
+    require_mcp_allowed()
 
     if not mcp_client.is_available():
         raise HTTPException(
