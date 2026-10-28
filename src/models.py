@@ -480,6 +480,8 @@ class AnthropicUsage(BaseModel):
 
     input_tokens: int
     output_tokens: int
+    cache_read_input_tokens: Optional[int] = None
+    cache_creation_input_tokens: Optional[int] = None
 
 
 class AnthropicMessagesResponse(BaseModel):
@@ -490,6 +492,8 @@ class AnthropicMessagesResponse(BaseModel):
     role: Literal["assistant"] = "assistant"
     content: List[AnthropicTextBlock]
     model: str
-    stop_reason: Optional[Literal["end_turn", "max_tokens", "stop_sequence"]] = "end_turn"
+    stop_reason: Optional[
+        Literal["end_turn", "max_tokens", "stop_sequence", "tool_use", "pause_turn", "refusal"]
+    ] = "end_turn"
     stop_sequence: Optional[str] = None
     usage: AnthropicUsage

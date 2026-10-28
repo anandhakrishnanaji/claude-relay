@@ -43,6 +43,7 @@ from src.models import (
 )
 from src.claude_cli import ClaudeCodeCLI
 from src.message_adapter import MessageAdapter
+from src import usage as sdk_usage
 from src.auth import verify_api_key, security, validate_claude_code_auth, get_claude_code_auth_info
 from src.parameter_validator import ParameterValidator, CompatibilityReporter
 from src.session_manager import session_manager
@@ -780,21 +781,25 @@ async def generate_streaming_response(
         # Prepare usage data if requested
         usage_data = None
         if request.stream_options and request.stream_options.include_usage:
-            # Estimate token usage based on prompt and completion
+            # Real usage from the SDK result message; estimate only if it has none
             completion_text = assistant_content or ""
-            token_usage = claude_cli.estimate_token_usage(prompt, completion_text, request.model)
+            estimate = claude_cli.estimate_token_usage(prompt, completion_text, request.model)
             usage_data = Usage(
-                prompt_tokens=token_usage["prompt_tokens"],
-                completion_tokens=token_usage["completion_tokens"],
-                total_tokens=token_usage["total_tokens"],
+                **sdk_usage.openai_usage_counts(
+                    chunks_buffer, estimate["prompt_tokens"], estimate["completion_tokens"]
+                )
             )
-            logger.debug(f"Estimated usage: {usage_data}")
+            logger.debug(f"Usage: {usage_data}")
 
         # Send final chunk with finish reason and optionally usage data
         final_chunk = ChatCompletionStreamResponse(
             id=request_id,
             model=request.model,
-            choices=[StreamChoice(index=0, delta={}, finish_reason="stop")],
+            choices=[
+                StreamChoice(
+                    index=0, delta={}, finish_reason=sdk_usage.openai_finish_reason(chunks_buffer)
+                )
+            ],
             usage=usage_data,
         )
         yield f"data: {final_chunk.model_dump_json()}\n\n"
@@ -916,6 +921,10 @@ async def chat_completions(
             ):
                 chunks.append(chunk)
 
+            sdk_error = sdk_usage.result_error(chunks)
+            if sdk_error:
+                raise HTTPException(status_code=sdk_error["status"], detail=sdk_error["message"])
+
             # Extract assistant message
             raw_assistant_content = claude_cli.parse_claude_message(chunks)
 
@@ -930,9 +939,12 @@ async def chat_completions(
                 assistant_message = Message(role="assistant", content=assistant_content)
                 session_manager.add_assistant_response(actual_session_id, assistant_message)
 
-            # Estimate tokens (rough approximation)
-            prompt_tokens = MessageAdapter.estimate_tokens(prompt)
-            completion_tokens = MessageAdapter.estimate_tokens(assistant_content)
+            # Real usage from the SDK result message; estimate only if it has none
+            token_usage = sdk_usage.openai_usage_counts(
+                chunks,
+                MessageAdapter.estimate_tokens(prompt),
+                MessageAdapter.estimate_tokens(assistant_content),
+            )
 
             # Create response
             response = ChatCompletionResponse(
@@ -942,14 +954,10 @@ async def chat_completions(
                     Choice(
                         index=0,
                         message=Message(role="assistant", content=assistant_content),
-                        finish_reason="stop",
+                        finish_reason=sdk_usage.openai_finish_reason(chunks),
                     )
                 ],
-                usage=Usage(
-                    prompt_tokens=prompt_tokens,
-                    completion_tokens=completion_tokens,
-                    total_tokens=prompt_tokens + completion_tokens,
-                ),
+                usage=Usage(**token_usage),
             )
 
             return response
@@ -1033,6 +1041,10 @@ async def anthropic_messages(
         ):
             chunks.append(chunk)
 
+        sdk_error = sdk_usage.result_error(chunks)
+        if sdk_error:
+            raise HTTPException(status_code=sdk_error["status"], detail=sdk_error["message"])
+
         # Extract assistant message
         raw_assistant_content = claude_cli.parse_claude_message(chunks)
 
@@ -1042,19 +1054,22 @@ async def anthropic_messages(
         # Filter out tool usage and thinking blocks
         assistant_content = MessageAdapter.filter_content(raw_assistant_content)
 
-        # Estimate tokens
-        prompt_tokens = MessageAdapter.estimate_tokens(prompt)
-        completion_tokens = MessageAdapter.estimate_tokens(assistant_content)
+        # Real usage from the SDK result message; estimate only if it has none
+        real_usage = sdk_usage.extract_usage(chunks)
+        if real_usage:
+            anthropic_usage = AnthropicUsage(**real_usage)
+        else:
+            anthropic_usage = AnthropicUsage(
+                input_tokens=MessageAdapter.estimate_tokens(prompt),
+                output_tokens=MessageAdapter.estimate_tokens(assistant_content),
+            )
 
         # Create Anthropic-format response
         response = AnthropicMessagesResponse(
             model=request_body.model,
             content=[AnthropicTextBlock(text=assistant_content)],
-            stop_reason="end_turn",
-            usage=AnthropicUsage(
-                input_tokens=prompt_tokens,
-                output_tokens=completion_tokens,
-            ),
+            stop_reason=sdk_usage.anthropic_stop_reason(chunks),
+            usage=anthropic_usage,
         )
 
         return response
