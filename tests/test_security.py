@@ -298,3 +298,30 @@ class TestSessionEndpointsAuth:
                 assert ok.status_code == 200
         finally:
             main.session_manager.delete_session("abc")
+
+
+class TestDiagnosticEndpoints:
+    """/v1/auth/status and /v1/debug/request need the API key, and never echo credentials."""
+
+    @pytest.mark.parametrize(
+        "method,path", [("get", "/v1/auth/status"), ("post", "/v1/debug/request")]
+    )
+    def test_requires_api_key(self, method, path):
+        import claude_relay.auth as auth
+
+        with patch.object(auth.auth_manager, "env_api_key", "secret-key"):
+            client = TestClient(main.app, base_url="http://localhost")
+            assert getattr(client, method)(path).status_code == 401
+            ok = getattr(client, method)(path, headers={"Authorization": "Bearer secret-key"})
+            assert ok.status_code == 200
+
+    def test_debug_request_redacts_credentials(self):
+        response = TestClient(main.app, base_url="http://localhost").post(
+            "/v1/debug/request",
+            json={"model": "m", "messages": []},
+            headers={"Authorization": "Bearer tok-123", "X-Api-Key": "k-456"},
+        )
+        assert response.status_code == 200
+        assert "tok-123" not in response.text
+        assert "k-456" not in response.text
+        assert response.json()["debug_info"]["headers"]["authorization"] == "[REDACTED]"

@@ -459,6 +459,14 @@ app.add_middleware(RequestIDMiddleware)
 app.add_middleware(RequestSizeLimitMiddleware)
 
 
+SECRET_HEADERS = {"authorization", "x-api-key", "cookie", "proxy-authorization"}
+
+
+def redact_headers(headers) -> Dict[str, str]:
+    """Copy request headers with credential values masked, for logs and debug output."""
+    return {k: "[REDACTED]" if k.lower() in SECRET_HEADERS else v for k, v in headers.items()}
+
+
 class DebugLoggingMiddleware(BaseHTTPMiddleware):
     """ASGI-compliant middleware for logging request/response details when debug mode is enabled."""
 
@@ -1780,8 +1788,11 @@ async def root():
 
 @app.post("/v1/debug/request")
 @rate_limit_endpoint("debug")
-async def debug_request_validation(request: Request):
+async def debug_request_validation(
+    request: Request, credentials: Optional[HTTPAuthorizationCredentials] = Depends(security)
+):
     """Debug endpoint to test request validation and see what's being sent."""
+    await verify_api_key(request, credentials)
     try:
         # Get the raw request body
         body = await request.body()
@@ -1819,7 +1830,7 @@ async def debug_request_validation(request: Request):
 
         return {
             "debug_info": {
-                "headers": dict(request.headers),
+                "headers": redact_headers(request.headers),
                 "method": request.method,
                 "url": str(request.url),
                 "raw_body": raw_body,
@@ -1839,7 +1850,7 @@ async def debug_request_validation(request: Request):
         return {
             "debug_info": {
                 "error": f"Debug endpoint error: {str(e)}",
-                "headers": dict(request.headers),
+                "headers": redact_headers(request.headers),
                 "method": request.method,
                 "url": str(request.url),
             }
@@ -1848,8 +1859,11 @@ async def debug_request_validation(request: Request):
 
 @app.get("/v1/auth/status")
 @rate_limit_endpoint("auth")
-async def get_auth_status(request: Request):
+async def get_auth_status(
+    request: Request, credentials: Optional[HTTPAuthorizationCredentials] = Depends(security)
+):
     """Get Claude Code authentication status."""
+    await verify_api_key(request, credentials)
     from claude_relay.auth import auth_manager
 
     auth_info = get_claude_code_auth_info()
