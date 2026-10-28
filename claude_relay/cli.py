@@ -11,6 +11,9 @@ from typing import List, Optional
 
 from dotenv import find_dotenv, load_dotenv
 
+# Wildcard addresses, used only to pick the URL to print; nothing binds to these here.
+_ALL_INTERFACES = ("0.0.0.0", "::")  # nosec B104
+
 
 def _version() -> str:
     try:
@@ -98,7 +101,7 @@ def main(argv: Optional[List[str]] = None) -> None:
     if _port_in_use(host, port):
         sys.exit(f"claude-relay: port {port} on {host} is already in use; pick another with --port")
 
-    display_host = "localhost" if _is_loopback(host) or host in ("0.0.0.0", "::") else host
+    display_host = "localhost" if _is_loopback(host) or host in _ALL_INTERFACES else host
     api_key = os.getenv("API_KEY")
     print(f"claude-relay {_version()}")
     print(f"  OpenAI base URL:    http://{display_host}:{port}/v1")
