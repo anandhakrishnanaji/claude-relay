@@ -1,39 +1,22 @@
 import os
-import json
 import logging
-import uuid
-from typing import Optional, AsyncIterator, Dict, Any, List
+from typing import Optional
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI, HTTPException, Request, Depends
 from fastapi.security import HTTPAuthorizationCredentials
-from fastapi.responses import StreamingResponse, HTMLResponse
+from fastapi.responses import HTMLResponse
 from dotenv import load_dotenv
 
-from claude_relay.models import (
-    ChatCompletionRequest,
-    ChatCompletionResponse,
-    ChatCompletionStreamResponse,
-    Choice,
-    Message,
-    Usage,
-    StreamChoice,
-    SessionListResponse,
-    # Anthropic API compatible models
-    AnthropicMessagesRequest,
-    AnthropicMessagesResponse,
-    AnthropicTextBlock,
-    AnthropicUsage,
-)
-from claude_relay import usage as sdk_usage
+from claude_relay.models import SessionListResponse
 from claude_relay.auth import (
     verify_api_key,
     security,
     validate_claude_code_auth,
     get_claude_code_auth_info,
 )
-from claude_relay.completion import CompletionError, Run, claude_cli, prepare
-from claude_relay.errors import add_error_handlers, anthropic_error, openai_error
+from claude_relay.completion import claude_cli
+from claude_relay.errors import add_error_handlers
 from claude_relay.middleware import (
     DebugLoggingMiddleware,
     RequestIDMiddleware,
@@ -41,6 +24,8 @@ from claude_relay.middleware import (
     add_security_middleware,
 )
 from claude_relay.responses_api import router as responses_router
+from claude_relay.routers.chat import router as chat_router
+from claude_relay.routers.messages import router as messages_router
 from claude_relay.routers.models import resolve_default_model
 from claude_relay.routers.models import router as models_router
 from claude_relay import session_manager as session_manager_module
@@ -143,6 +128,8 @@ app = FastAPI(
     lifespan=lifespan,
 )
 app.include_router(responses_router)
+app.include_router(chat_router)
+app.include_router(messages_router)
 app.include_router(models_router)
 add_error_handlers(app)
 
@@ -158,192 +145,6 @@ if limiter:
 app.add_middleware(RequestIDMiddleware)
 app.add_middleware(RequestSizeLimitMiddleware, max_size=MAX_REQUEST_SIZE)
 app.add_middleware(DebugLoggingMiddleware)
-
-
-def sse(event: str, data: Dict[str, Any]) -> str:
-    return f"event: {event}\ndata: {json.dumps(data)}\n\n"
-
-
-async def start_stream(events: AsyncIterator[str]) -> StreamingResponse:
-    """Stream SSE events, but wait for the first one so an unknown model is a plain 400."""
-    first = await events.__anext__()  # a CompletionError here becomes a normal HTTP error
-
-    async def all_events():
-        yield first
-        async for event in events:
-            yield event
-
-    return StreamingResponse(
-        all_events(),
-        media_type="text/event-stream",
-        headers={"Cache-Control": "no-cache", "Connection": "keep-alive"},
-    )
-
-
-async def chat_stream(run: Run, request_id: str, include_usage: bool) -> AsyncIterator[str]:
-    """OpenAI chat.completion.chunk events for one run."""
-
-    def chunk(delta: Dict[str, Any], finish_reason=None, usage=None) -> str:
-        choice = StreamChoice(index=0, delta=delta, finish_reason=finish_reason)
-        event = ChatCompletionStreamResponse(
-            id=request_id, model=run.model, choices=[choice], usage=usage
-        )
-        return f"data: {event.model_dump_json()}\n\n"
-
-    role_sent = False
-    try:
-        async for item in run.stream():
-            if not role_sent:
-                yield chunk({"role": "assistant", "content": ""})
-                role_sent = True
-            if isinstance(item, str):
-                yield chunk({"content": item})
-            else:
-                completion = item
-    except CompletionError as e:
-        if e.kind == "model_not_found" and not role_sent:
-            raise
-        # The 200 status line is already sent, so report it as a final error event
-        yield f"data: {json.dumps(openai_error(e))}\n\n"
-        return
-
-    usage = Usage(**completion.openai_usage()) if include_usage else None
-    yield chunk({}, sdk_usage.openai_finish_reason(completion.chunks), usage)
-    yield "data: [DONE]\n\n"
-
-
-@app.post("/v1/chat/completions")
-@rate_limit_endpoint("chat")
-async def chat_completions(
-    request_body: ChatCompletionRequest,
-    request: Request,
-    credentials: Optional[HTTPAuthorizationCredentials] = Depends(security),
-):
-    """OpenAI-compatible chat completions endpoint."""
-    await verify_api_key(request, credentials)
-
-    run = prepare(
-        model=request_body.model,
-        messages=request_body.messages,
-        enable_tools=bool(request_body.enable_tools),
-        headers=request.headers,
-        effort=request_body.to_claude_options().get("effort"),
-        system_suffix=request_body.get_sampling_instructions(),
-        session_id=request_body.session_id,
-    )
-    request_id = f"chatcmpl-{os.urandom(8).hex()}"
-
-    if request_body.stream:
-        include_usage = bool(
-            request_body.stream_options and request_body.stream_options.include_usage
-        )
-        return await start_stream(chat_stream(run, request_id, include_usage))
-
-    completion = await run.complete()
-    return ChatCompletionResponse(
-        id=request_id,
-        model=completion.model,
-        choices=[
-            Choice(
-                index=0,
-                message=Message(role="assistant", content=completion.text),
-                finish_reason=sdk_usage.openai_finish_reason(completion.chunks),
-            )
-        ],
-        usage=Usage(**completion.openai_usage()),
-    )
-
-
-async def messages_stream(run: Run) -> AsyncIterator[str]:
-    """Anthropic Messages SSE events for one run (shapes from anthropic.types)."""
-    message_id = f"msg_{uuid.uuid4().hex[:24]}"
-    started = False
-
-    def start_events() -> List[str]:
-        message = AnthropicMessagesResponse(
-            id=message_id,
-            model=run.model,
-            content=[],
-            stop_reason=None,
-            usage=AnthropicUsage(input_tokens=0, output_tokens=0),
-        )
-        return [
-            sse("message_start", {"type": "message_start", "message": message.model_dump()}),
-            sse(
-                "content_block_start",
-                {
-                    "type": "content_block_start",
-                    "index": 0,
-                    "content_block": {"type": "text", "text": ""},
-                },
-            ),
-        ]
-
-    try:
-        async for item in run.stream():
-            if not started:
-                for event in start_events():
-                    yield event
-                started = True
-            if isinstance(item, str):
-                delta = {"type": "text_delta", "text": item}
-                yield sse(
-                    "content_block_delta",
-                    {"type": "content_block_delta", "index": 0, "delta": delta},
-                )
-            else:
-                completion = item
-    except CompletionError as e:
-        if e.kind == "model_not_found" and not started:
-            raise
-        yield sse("error", anthropic_error(e.status, e.message))
-        return
-
-    stop_reason = sdk_usage.anthropic_stop_reason(completion.chunks)
-    yield sse("content_block_stop", {"type": "content_block_stop", "index": 0})
-    yield sse(
-        "message_delta",
-        {
-            "type": "message_delta",
-            "delta": {"stop_reason": stop_reason, "stop_sequence": None},
-            "usage": completion.anthropic_usage(),
-        },
-    )
-    yield sse("message_stop", {"type": "message_stop"})
-
-
-@app.post("/v1/messages")
-@rate_limit_endpoint("chat")
-async def anthropic_messages(
-    request_body: AnthropicMessagesRequest,
-    request: Request,
-    credentials: Optional[HTTPAuthorizationCredentials] = Depends(security),
-):
-    """Anthropic Messages API compatible endpoint."""
-    await verify_api_key(request, credentials)
-
-    system = request_body.system_text()
-    messages = [Message(role="system", content=system)] if system else []
-    run = prepare(
-        model=request_body.model,
-        messages=messages + request_body.to_openai_messages(),
-        enable_tools=bool(request_body.enable_tools),
-        thinking=(
-            request_body.thinking.model_dump(exclude_none=True) if request_body.thinking else None
-        ),
-        effort=request_body.output_config.effort if request_body.output_config else None,
-    )
-
-    if request_body.stream:
-        return await start_stream(messages_stream(run))
-
-    completion = await run.complete()
-    return AnthropicMessagesResponse(
-        model=completion.model,
-        content=[AnthropicTextBlock(text=completion.text)],
-        stop_reason=sdk_usage.anthropic_stop_reason(completion.chunks),
-        usage=AnthropicUsage(**completion.anthropic_usage()),
-    )
 
 
 @app.get("/health")
