@@ -346,7 +346,7 @@ The `Dockerfile` in the repo root builds the same non-root image, and the includ
 | `CLAUDE_WRAPPER_HOST` | Interface to bind (`--host`) | `127.0.0.1` (`0.0.0.0` in the Docker image) |
 | `PORT` | Server port (`--port`) | `8000` |
 | `API_KEY` | Key clients must send as a bearer token (`--api-key`) | - |
-| `MAX_TIMEOUT` | Request timeout (seconds) | `300` |
+| `MAX_TIMEOUT` | Request timeout in milliseconds (600000 = 10 minutes) | `600000` |
 | `CLAUDE_CWD` | Working directory | temp dir |
 | `CLAUDE_SETTING_SOURCES` | Comma-separated filesystem settings the CLI loads per request (`user`, `project`, `local`). Empty isolates requests from the host's `~/.claude/CLAUDE.md`, settings, skills and plugins. | empty |
 | `CORS_ORIGINS` | JSON list of browser origins allowed to call the API. `["*"]` allows any origin, without credentials; only use it with `API_KEY` set. | `[]` (none) |
