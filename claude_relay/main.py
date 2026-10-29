@@ -23,7 +23,7 @@ from claude_relay.middleware import (
     RequestSizeLimitMiddleware,
     add_security_middleware,
 )
-from claude_relay.responses_api import router as responses_router
+from claude_relay.routers.responses import router as responses_router
 from claude_relay.routers.chat import router as chat_router
 from claude_relay.routers.messages import router as messages_router
 from claude_relay.routers.models import resolve_default_model
