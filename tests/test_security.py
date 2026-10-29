@@ -345,3 +345,41 @@ class TestLogRedaction:
         assert response.status_code == 422
         assert "Validation errors" in caplog.text
         assert "my-secret-prompt" not in caplog.text
+
+
+class TestRequestSizeLimit:
+    """MAX_REQUEST_SIZE holds for chunked bodies too, and a bad Content-Length is a 400."""
+
+    def _client(self):
+        return TestClient(main.app, base_url="http://localhost")
+
+    def test_chunked_body_over_limit(self):
+        def body():
+            for _ in range(11):
+                yield b"x" * (1024 * 1024)
+
+        response = self._client().post(
+            "/v1/chat/completions", content=body(), headers={"Content-Type": "application/json"}
+        )
+        assert response.status_code == 413
+        assert response.json()["error"]["type"] == "request_too_large"
+
+    def test_content_length_over_limit(self):
+        response = self._client().post(
+            "/v1/chat/completions", content=b"x" * (main.MAX_REQUEST_SIZE + 1)
+        )
+        assert response.status_code == 413
+
+    def test_bad_content_length(self):
+        response = self._client().post(
+            "/v1/chat/completions", content=b"{}", headers={"Content-Length": "abc"}
+        )
+        assert response.status_code == 400
+        assert response.json()["error"]["message"] == "Invalid Content-Length header"
+
+    def test_normal_body_passes(self):
+        from tests.test_real_usage import chat, make_chunks
+
+        response = chat(make_chunks(text="ok"))
+        assert response.status_code == 200
+        assert response.json()["choices"][0]["message"]["content"] == "ok"

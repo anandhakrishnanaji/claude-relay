@@ -316,8 +316,8 @@ async def _stream(
             # The ResultMessage repeats the whole text, so only assistant chunks are streamed
             if sdk_usage.find_result_message([chunk]):
                 continue
-            # The CLI's own login/model error text; reported as response.failed below
-            if chunk.get("error") in ("authentication_failed", "model_not_found"):
+            # The CLI's own error text (login, model, rate limit...); reported as response.failed
+            if chunk.get("error"):
                 continue
             text = MessageAdapter.filter_content(claude_cli.parse_claude_message([chunk]) or "")
             if text and not text.isspace():

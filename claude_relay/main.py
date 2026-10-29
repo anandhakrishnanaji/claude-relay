@@ -64,7 +64,7 @@ from claude_relay.rate_limiter import (
 )
 from datetime import datetime, timezone
 
-from claude_relay import constants
+from claude_relay import __version__, constants
 from claude_relay.constants import (
     ALLOWED_HOSTS,
     ANTHROPIC_MODELS_URL,
@@ -296,25 +296,13 @@ async def lifespan(app: FastAPI):
     else:
         logger.info(f"✅ Claude Code authentication validated: {auth_info['method']}")
 
-    # Verify Claude Agent SDK with timeout for graceful degradation
-    try:
-        logger.info("Testing Claude Agent SDK connection...")
-        # Use asyncio.wait_for to enforce timeout (30 seconds)
-        cli_verified = await asyncio.wait_for(claude_cli.verify_cli(), timeout=30.0)
-
-        if cli_verified:
-            logger.info("✅ Claude Agent SDK verified successfully")
-        else:
-            logger.warning("⚠️  Claude Agent SDK verification returned False")
-            logger.warning("The server will start, but requests may fail.")
-    except asyncio.TimeoutError:
-        logger.warning("⚠️  Claude Agent SDK verification timed out (30s)")
-        logger.warning("This may indicate network issues or SDK configuration problems.")
-        logger.warning("The server will start, but first request may be slow.")
-    except Exception as e:
-        logger.error(f"⚠️  Claude Agent SDK verification failed: {e}")
-        logger.warning("The server will start, but requests may fail.")
-        logger.warning("Check that Claude Code CLI is properly installed and authenticated.")
+    # `claude auth status`: checks the CLI runs and is logged in, without a model call
+    if await claude_cli.verify_cli():
+        logger.info("✅ Claude Code CLI found and logged in")
+    else:
+        logger.warning(
+            "⚠️  Claude Code CLI check failed; the server will start, but requests may fail"
+        )
 
     # Log debug information if debug mode is enabled
     if DEBUG_MODE or VERBOSE:
@@ -358,7 +346,7 @@ async def lifespan(app: FastAPI):
 app = FastAPI(
     title="claude-relay",
     description="Claude Code API server with OpenAI- and Anthropic-compatible endpoints",
-    version="1.0.0",
+    version=__version__,
     lifespan=lifespan,
 )
 app.include_router(responses_router)
@@ -439,28 +427,79 @@ class RequestIDMiddleware(BaseHTTPMiddleware):
         return response
 
 
-class RequestSizeLimitMiddleware(BaseHTTPMiddleware):
-    """Limit request body size to prevent DoS attacks."""
+class RequestSizeLimitMiddleware:
+    """Reject request bodies over max_size bytes, with or without a Content-Length.
 
-    async def dispatch(self, request: Request, call_next):
-        content_length = request.headers.get("content-length")
-        if content_length and int(content_length) > MAX_REQUEST_SIZE:
-            return JSONResponse(
-                status_code=413,
-                content={
-                    "error": {
-                        "message": f"Request body too large. Maximum size is {MAX_REQUEST_SIZE} bytes.",
-                        "type": "request_too_large",
-                        "code": 413,
-                    }
-                },
-            )
-        return await call_next(request)
+    Pure ASGI, so it counts the bytes of a chunked body as they arrive.
+    """
+
+    def __init__(self, app, max_size: int):
+        self.app = app
+        self.max_size = max_size
+
+    def _too_large(self) -> JSONResponse:
+        return JSONResponse(
+            status_code=413,
+            content={
+                "error": {
+                    "message": f"Request body too large. Maximum size is {self.max_size} bytes.",
+                    "type": "request_too_large",
+                    "code": 413,
+                }
+            },
+        )
+
+    async def __call__(self, scope, receive, send):
+        if scope["type"] != "http":
+            await self.app(scope, receive, send)
+            return
+
+        content_length = Headers(scope=scope).get("content-length")
+        if content_length is not None:
+            if not content_length.isdigit():
+                error = {
+                    "message": "Invalid Content-Length header",
+                    "type": "invalid_request_error",
+                    "code": 400,
+                }
+                await JSONResponse(status_code=400, content={"error": error})(scope, receive, send)
+                return
+            if int(content_length) > self.max_size:
+                await self._too_large()(scope, receive, send)
+                return
+
+        received = 0
+        response_started = False
+        rejected = False
+
+        async def limited_receive():
+            nonlocal received, rejected
+            if rejected:
+                return {"type": "http.disconnect"}
+            message = await receive()
+            if message["type"] == "http.request":
+                received += len(message.get("body", b""))
+                if received > self.max_size:
+                    rejected = True
+                    if not response_started:
+                        await self._too_large()(scope, receive, send)
+                    # The app sees a disconnect and stops; its own reply is dropped below
+                    return {"type": "http.disconnect"}
+            return message
+
+        async def guarded_send(message):
+            nonlocal response_started
+            if rejected:
+                return
+            response_started = response_started or message["type"] == "http.response.start"
+            await send(message)
+
+        await self.app(scope, limited_receive, guarded_send)
 
 
 # Add security middleware (order matters - first added = last executed)
 app.add_middleware(RequestIDMiddleware)
-app.add_middleware(RequestSizeLimitMiddleware)
+app.add_middleware(RequestSizeLimitMiddleware, max_size=MAX_REQUEST_SIZE)
 
 
 SECRET_HEADERS = {"authorization", "x-api-key", "cookie", "proxy-authorization"}
@@ -622,6 +661,10 @@ def _openai_auth_error(exc: ClaudeAuthError) -> Dict[str, Any]:
     }
 
 
+def _openai_error(status: int, message: Any) -> Dict[str, Any]:
+    return {"error": {"message": message, "type": "api_error", "code": str(status)}}
+
+
 @app.exception_handler(ClaudeAuthError)
 async def claude_auth_error_handler(request: Request, exc: ClaudeAuthError):
     """Return the 401 in the calling endpoint's native error format."""
@@ -704,7 +747,6 @@ async def generate_streaming_response(
         # Run Claude Code
         chunks_buffer = []
         role_sent = False  # Track if we've sent the initial role chunk
-        content_sent = False  # Track if we've sent any content
         response_model = request.model  # Replaced by the real model once the SDK reports it
 
         async for chunk in claude_cli.run_completion(
@@ -724,12 +766,12 @@ async def generate_streaming_response(
         ):
             chunks_buffer.append(chunk)
             response_model = sdk_usage.extract_model([chunk], response_model)
-            if chunk.get("error") == "authentication_failed":
-                continue  # the CLI's login error text; reported as an error chunk below
             if chunk.get("error") == "model_not_found" and not role_sent:
                 raise ModelNotFoundError(
                     claude_cli.parse_claude_message([chunk]) or "Unknown model"
                 )
+            if chunk.get("error"):
+                continue  # the CLI's own error text (login, rate limit...); reported below
 
             # Check if we have an assistant message
             # Handle both old format (type/message structure) and new format (direct content)
@@ -790,7 +832,6 @@ async def generate_streaming_response(
                             )
 
                             yield f"data: {stream_chunk.model_dump_json()}\n\n"
-                            content_sent = True
 
                 elif isinstance(content, str):
                     # Filter out tool usage and thinking blocks
@@ -809,12 +850,14 @@ async def generate_streaming_response(
                         )
 
                         yield f"data: {stream_chunk.model_dump_json()}\n\n"
-                        content_sent = True
 
         sdk_error = _sdk_error(chunks_buffer)
-        if sdk_error and sdk_error.get("auth_failure"):
+        if sdk_error:
             # The 200 status line is already sent, so report it as a final error event
-            error_chunk = _openai_auth_error(ClaudeAuthError(sdk_error["auth_failure"]))
+            if sdk_error.get("auth_failure"):
+                error_chunk = _openai_auth_error(ClaudeAuthError(sdk_error["auth_failure"]))
+            else:
+                error_chunk = _openai_error(sdk_error["status"], sdk_error["message"])
             yield f"data: {json.dumps(error_chunk)}\n\n"
             return
 
@@ -832,21 +875,6 @@ async def generate_streaming_response(
             )
             yield f"data: {initial_chunk.model_dump_json()}\n\n"
             role_sent = True
-
-        # If we sent role but no content, send a minimal response
-        if role_sent and not content_sent:
-            fallback_chunk = ChatCompletionStreamResponse(
-                id=request_id,
-                model=response_model,
-                choices=[
-                    StreamChoice(
-                        index=0,
-                        delta={"content": "I'm unable to provide a response at the moment."},
-                        finish_reason=None,
-                    )
-                ],
-            )
-            yield f"data: {fallback_chunk.model_dump_json()}\n\n"
 
         # Extract assistant response from all chunks
         assistant_content = None
@@ -1304,8 +1332,6 @@ async def health_check(request: Request):
 @rate_limit_endpoint("health")
 async def version_info(request: Request):
     """Version information endpoint."""
-    from claude_relay import __version__
-
     return {
         "version": __version__,
         "service": "claude-code-openai-wrapper",
@@ -1316,8 +1342,6 @@ async def version_info(request: Request):
 @app.get("/", response_class=HTMLResponse)
 async def root():
     """Landing page with API documentation."""
-    from claude_relay import __version__
-
     auth_info = get_claude_code_auth_info()
     auth_method = auth_info.get("method", "unknown")
     auth_valid = auth_info.get("status", {}).get("valid", False)
@@ -2009,7 +2033,7 @@ async def get_auth_status(
         "server_info": {
             "api_key_required": bool(active_api_key),
             "api_key_source": "environment" if os.getenv("API_KEY") else "none",
-            "version": "1.0.0",
+            "version": __version__,
         },
     }
 
@@ -2326,10 +2350,7 @@ async def get_mcp_stats(
 async def http_exception_handler(request: Request, exc: HTTPException):
     """Format HTTP exceptions as OpenAI-style errors."""
     return JSONResponse(
-        status_code=exc.status_code,
-        content={
-            "error": {"message": exc.detail, "type": "api_error", "code": str(exc.status_code)}
-        },
+        status_code=exc.status_code, content=_openai_error(exc.status_code, exc.detail)
     )
 
 

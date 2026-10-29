@@ -7,6 +7,7 @@ from typing import AsyncGenerator, Dict, Any, Optional, List
 from pathlib import Path
 import logging
 
+import claude_agent_sdk
 from claude_agent_sdk import query, ClaudeAgentOptions
 
 from claude_relay import constants
@@ -18,6 +19,12 @@ logger = logging.getLogger(__name__)
 # passes a string system prompt as one --system-prompt argument. Prompts larger
 # than this many UTF-8 bytes are written to a temp file instead.
 SYSTEM_PROMPT_FILE_THRESHOLD_BYTES = 100_000
+
+
+def _find_cli() -> Optional[str]:
+    """The CLI the SDK runs: its bundled binary, else ``claude`` on PATH."""
+    bundled = Path(claude_agent_sdk.__file__).parent / "_bundled" / "claude"
+    return str(bundled) if bundled.is_file() else shutil.which("claude")
 
 
 class _QueryTimeout(Exception):
@@ -64,47 +71,42 @@ class ClaudeCodeCLI:
         # Store auth environment variables for SDK
         self.claude_env_vars = auth_manager.get_claude_code_env_vars()
 
-    async def verify_cli(self) -> bool:
-        """Verify Claude Agent SDK is working and authenticated."""
-        try:
-            # Test SDK with a simple query
-            logger.info("Testing Claude Agent SDK...")
+    async def verify_cli(self, timeout: float = 30.0) -> bool:
+        """Check the Claude Code CLI runs and is logged in, without a model call.
 
-            messages = []
-            async for message in query(
-                prompt="Hello",
-                options=ClaudeAgentOptions(
-                    max_turns=1,
-                    cwd=self.cwd,
-                    system_prompt={"type": "preset", "preset": "claude_code"},
-                    env=dict(self.claude_env_vars or {}),
-                ),
-            ):
-                messages.append(message)
-                # Break early on first response to speed up verification
-                # Handle both dict and object types
-                msg_type = (
-                    getattr(message, "type", None)
-                    if hasattr(message, "type")
-                    else message.get("type") if isinstance(message, dict) else None
-                )
-                if msg_type == "assistant":
-                    break
-
-            if messages:
-                logger.info("✅ Claude Agent SDK verified successfully")
-                return True
-            else:
-                logger.warning("⚠️ Claude Agent SDK test returned no messages")
-                return False
-
-        except Exception as e:
-            logger.error(f"Claude Agent SDK verification failed: {e}")
-            logger.warning("Please ensure Claude Code is installed and authenticated:")
-            logger.warning("  1. Install: npm install -g @anthropic-ai/claude-code")
-            logger.warning("  2. Set ANTHROPIC_API_KEY environment variable")
-            logger.warning("  3. Test: claude --print 'Hello'")
+        Runs ``claude auth status``, which reads local credentials only and exits
+        non-zero when not logged in. It costs no tokens.
+        """
+        cli = _find_cli()
+        if not cli:
+            logger.error("Claude Code CLI not found (neither bundled with the SDK nor on PATH)")
             return False
+        try:
+            proc = await asyncio.create_subprocess_exec(
+                cli,
+                "auth",
+                "status",
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.PIPE,
+                env={**os.environ, **(self.claude_env_vars or {})},
+                cwd=self.cwd,
+            )
+        except OSError as e:
+            logger.error(f"Could not run Claude Code CLI {cli}: {e}")
+            return False
+        try:
+            stdout, stderr = await asyncio.wait_for(proc.communicate(), timeout=timeout)
+        except asyncio.TimeoutError:
+            proc.kill()
+            await proc.wait()
+            logger.warning(f"`claude auth status` timed out after {timeout:g}s")
+            return False
+        if proc.returncode != 0:
+            detail = (stderr or stdout).decode(errors="replace").strip()[:500]
+            logger.warning(f"Claude Code CLI is not logged in: {detail}")
+            logger.warning("Run `claude auth login` on this host, or set CLAUDE_CODE_OAUTH_TOKEN")
+            return False
+        return True
 
     async def run_completion(
         self,

@@ -120,6 +120,50 @@ class TestChatCompletionsUsage:
         assert "529" in response.text
 
 
+LIMIT_TEXT = "You've hit your limit"
+
+
+def sdk_failure(message):
+    """The chunk run_completion yields for a timeout or a CLI/SDK exception."""
+    return {
+        "type": "result",
+        "subtype": "error_during_execution",
+        "is_error": True,
+        "error_message": message,
+    }
+
+
+class TestChatStreamingErrors:
+    """Every SDK error ends the stream with an error event: no fake text, no [DONE]."""
+
+    @pytest.mark.parametrize(
+        "chunks,status",
+        [
+            (
+                [
+                    # The CLI's synthetic AssistantMessage for a usage limit
+                    {**make_chunks(text=LIMIT_TEXT)[0], "error": "rate_limit"},
+                    make_chunks(text=LIMIT_TEXT, is_error=True, api_error_status=429)[1],
+                ],
+                429,
+            ),
+            ([sdk_failure("Claude Agent SDK query timed out after 600 seconds")], 502),
+            ([sdk_failure("Command failed with exit code 1")], 502),
+        ],
+        ids=["usage_limit_429", "timeout", "generic_cli_error"],
+    )
+    def test_error_event(self, chunks, status):
+        response = chat(chunks, stream=True)
+        assert response.status_code == 200
+        assert "[DONE]" not in response.text
+        assert "unable to provide" not in response.text
+        events = stream_events(response)
+        assert events[-1] == main._openai_error(status, sdk_usage.result_error(chunks)["message"])
+        # The CLI's error text is not streamed as if it were the answer
+        assert all(e["choices"][0]["delta"].get("content") == "" for e in events[:-1])
+        assert all(e["choices"][0]["finish_reason"] is None for e in events[:-1])
+
+
 class TestAnthropicMessagesUsage:
     def _post(self, chunks):
         payload = {

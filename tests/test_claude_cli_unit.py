@@ -460,58 +460,39 @@ class TestClaudeCodeCLIVerifyCLI:
                     cli = ClaudeCodeCLI(cwd=temp_dir)
                     yield cli
 
-    @pytest.mark.asyncio
-    async def test_verify_cli_success(self, cli_instance):
-        """verify_cli returns True on successful SDK response."""
-        mock_message = {"type": "assistant", "content": [{"type": "text", "text": "Hello"}]}
-
-        async def mock_query(*args, **kwargs):
-            yield mock_message
-
-        with patch("claude_relay.claude_cli.query", mock_query):
-            result = await cli_instance.verify_cli()
-            assert result is True
+    def _fake_cli(self, tmp_path, script):
+        cli = tmp_path / "claude"
+        cli.write_text("#!/bin/sh\n" + script)
+        cli.chmod(0o755)
+        return patch("claude_relay.claude_cli._find_cli", return_value=str(cli))
 
     @pytest.mark.asyncio
-    async def test_verify_cli_passes_env_via_options(self, cli_instance):
-        """verify_cli passes auth env vars via options.env."""
+    async def test_runs_auth_status_without_a_query(self, cli_instance, tmp_path):
+        """verify_cli runs `claude auth status` with the auth env and never calls query()."""
         cli_instance.claude_env_vars = {"ANTHROPIC_API_KEY": "test-key"}
-        captured_options = []
-        env_before = dict(os.environ)
-
-        async def mock_query(prompt, options):
-            captured_options.append(options)
-            yield {"type": "assistant"}
-
-        with patch("claude_relay.claude_cli.query", mock_query):
+        out = tmp_path / "args"
+        script = f'echo "$@ $ANTHROPIC_API_KEY" > {out}\necho \'{{"loggedIn": true}}\'\n'
+        with (
+            self._fake_cli(tmp_path, script),
+            patch("claude_relay.claude_cli.query", side_effect=AssertionError("billable")),
+        ):
             assert await cli_instance.verify_cli() is True
-
-        assert captured_options[0].env == {"ANTHROPIC_API_KEY": "test-key"}
-        assert dict(os.environ) == env_before
+        assert out.read_text().strip() == "auth status test-key"
 
     @pytest.mark.asyncio
-    async def test_verify_cli_no_messages(self, cli_instance):
-        """verify_cli returns False when no messages returned."""
-
-        async def mock_query(*args, **kwargs):
-            return
-            yield  # Make it a generator but yield nothing
-
-        with patch("claude_relay.claude_cli.query", mock_query):
-            result = await cli_instance.verify_cli()
-            assert result is False
+    async def test_not_logged_in(self, cli_instance, tmp_path):
+        with self._fake_cli(tmp_path, "echo '{\"loggedIn\": false}'\nexit 1\n"):
+            assert await cli_instance.verify_cli() is False
 
     @pytest.mark.asyncio
-    async def test_verify_cli_exception(self, cli_instance):
-        """verify_cli returns False on exception."""
+    async def test_timeout_kills_the_process(self, cli_instance, tmp_path):
+        with self._fake_cli(tmp_path, "exec sleep 30\n"):
+            assert await cli_instance.verify_cli(timeout=0.2) is False
 
-        async def mock_query(*args, **kwargs):
-            raise RuntimeError("SDK error")
-            yield  # Make it a generator
-
-        with patch("claude_relay.claude_cli.query", mock_query):
-            result = await cli_instance.verify_cli()
-            assert result is False
+    @pytest.mark.asyncio
+    async def test_cli_missing(self, cli_instance):
+        with patch("claude_relay.claude_cli._find_cli", return_value=None):
+            assert await cli_instance.verify_cli() is False
 
 
 class TestClaudeCodeCLIRunCompletion:
