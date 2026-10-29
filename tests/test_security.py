@@ -15,6 +15,8 @@ from fastapi.testclient import TestClient
 
 import claude_relay.completion as completion
 import claude_relay.main as main
+import claude_relay.middleware as middleware
+from claude_relay import constants
 from claude_relay.constants import (
     CLAUDE_TOOLS,
     DEFAULT_ALLOWED_HOSTS,
@@ -38,7 +40,7 @@ def make_app(cors_origins=None, allowed_hosts=None):
     async def ping_post():
         return {"ok": True}
 
-    main.add_security_middleware(
+    middleware.add_security_middleware(
         app,
         parse_cors_origins(cors_origins),
         parse_allowed_hosts(allowed_hosts),
@@ -284,7 +286,7 @@ class TestDiagnosticEndpoints:
 
 class TestLogRedaction:
     def test_debug_log_masks_authorization(self, caplog):
-        with patch.object(main, "DEBUG_MODE", True), caplog.at_level("DEBUG"):
+        with patch.object(constants, "DEBUG_MODE", True), caplog.at_level("DEBUG"):
             TestClient(main.app, base_url="http://localhost").get(
                 "/health", headers={"Authorization": "Bearer tok-123"}
             )
@@ -321,7 +323,7 @@ class TestRequestSizeLimit:
 
     def test_content_length_over_limit(self):
         response = self._client().post(
-            "/v1/chat/completions", content=b"x" * (main.MAX_REQUEST_SIZE + 1)
+            "/v1/chat/completions", content=b"x" * (constants.MAX_REQUEST_SIZE + 1)
         )
         assert response.status_code == 413
 
