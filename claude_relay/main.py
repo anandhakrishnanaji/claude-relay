@@ -42,6 +42,7 @@ from claude_relay.auth import (
 )
 from claude_relay.completion import CompletionError, Run, claude_cli, prepare
 from claude_relay.responses_api import router as responses_router
+from claude_relay import session_manager as session_manager_module
 from claude_relay.session_manager import session_manager
 from claude_relay.rate_limiter import (
     limiter,
@@ -1535,7 +1536,7 @@ async def get_session_stats(
     return {
         "session_stats": stats,
         "cleanup_interval_minutes": session_manager.cleanup_interval_minutes,
-        "default_ttl_hours": session_manager.default_ttl_hours,
+        "default_ttl_minutes": session_manager_module.SESSION_TTL_MINUTES,
     }
 
 

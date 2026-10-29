@@ -10,6 +10,14 @@ from claude_relay.models import Message, SessionInfo
 
 logger = logging.getLogger(__name__)
 
+# Read at call time, so tests can patch them
+SESSION_TTL_MINUTES = int(os.getenv("SESSION_TTL_MINUTES", "60"))
+MAX_SESSION_MESSAGES = int(os.getenv("MAX_SESSION_MESSAGES", "200"))
+
+
+def _expiry() -> datetime:
+    return datetime.utcnow() + timedelta(minutes=SESSION_TTL_MINUTES)
+
 
 @dataclass
 class Session:
@@ -19,16 +27,26 @@ class Session:
     messages: List[Message] = field(default_factory=list)
     created_at: datetime = field(default_factory=datetime.utcnow)
     last_accessed: datetime = field(default_factory=datetime.utcnow)
-    expires_at: datetime = field(default_factory=lambda: datetime.utcnow() + timedelta(hours=1))
+    expires_at: datetime = field(default_factory=_expiry)
 
     def touch(self):
         """Update last accessed time and extend expiration."""
         self.last_accessed = datetime.utcnow()
-        self.expires_at = datetime.utcnow() + timedelta(hours=1)
+        self.expires_at = _expiry()
 
     def add_messages(self, messages: List[Message]):
-        """Add new messages to the session."""
+        """Add new messages; a new system message replaces the stored one.
+
+        Past MAX_SESSION_MESSAGES the oldest non-system messages are dropped.
+        """
+        if any(m.role == "system" for m in messages):
+            self.messages = [m for m in self.messages if m.role != "system"]
         self.messages.extend(messages)
+        excess = len(self.messages) - MAX_SESSION_MESSAGES
+        if excess > 0:
+            drop = {i for i, m in enumerate(self.messages) if m.role != "system"}
+            drop = set(sorted(drop)[:excess])
+            self.messages = [m for i, m in enumerate(self.messages) if i not in drop]
         self.touch()
 
     def get_all_messages(self) -> List[Message]:
@@ -55,7 +73,6 @@ class SessionManager:
 
     def __init__(
         self,
-        default_ttl_hours: int = 1,
         cleanup_interval_minutes: int = 5,
         max_sessions: Optional[int] = None,
     ):
@@ -63,7 +80,6 @@ class SessionManager:
         # Clients name sessions, so cap how many live at once
         self.max_sessions = max_sessions or int(os.getenv("MAX_SESSIONS", "1000"))
         self.lock = Lock()
-        self.default_ttl_hours = default_ttl_hours
         self.cleanup_interval_minutes = cleanup_interval_minutes
         self._cleanup_task = None
 

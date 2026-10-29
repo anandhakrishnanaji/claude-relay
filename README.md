@@ -37,7 +37,7 @@ See [INSTALL.md](./INSTALL.md) for pipx/pip, an always-on service and Docker.
 
 ## Highlights
 
-- **Two APIs, one server.** OpenAI-compatible `/v1/chat/completions` and Anthropic-compatible `/v1/messages`. Chat Completions supports streaming (SSE).
+- **Two APIs, one server.** OpenAI-compatible `/v1/chat/completions` and Anthropic-compatible `/v1/messages`. Both support streaming (SSE).
 - **Honours system prompts.** Your system message replaces Claude Code's own prompt on every endpoint, and `/v1/messages` also accepts `system` as a list of text blocks, as the Anthropic SDK sends it.
 - **Tools off by default.** Both endpoints run a single turn without tools, so untrusted text in a prompt can't run commands. To give Claude its Bash/Read/Write tools, the server must set `ALLOW_TOOLS=true` and the request must send `"enable_tools": true`.
 - **Isolated from host settings.** Requests don't load the host's `~/.claude/CLAUDE.md`, settings, skills or plugins. Set `CLAUDE_SETTING_SOURCES=user,project,local` to opt back in.
@@ -343,6 +343,8 @@ The image is built from the `Dockerfile` in the repo root, with the dependency v
 | `ALLOWED_HOSTS` | Comma-separated `Host` header allow-list; wildcards like `*.example.com` are allowed. Protects against DNS rebinding. Add every name clients use (LAN IP, container name, ...). `*` disables the check. | `localhost,127.0.0.1,::1,[::1],*.localhost` |
 | `FORWARDED_ALLOW_IPS` | Comma-separated proxy IPs whose `X-Forwarded-For` is trusted for the client IP (rate limits, logs). Read by `claude-relay`; plain `uvicorn` trusts `127.0.0.1` by default. | empty (none) |
 | `MAX_SESSIONS` | Most sessions kept in memory at once. Creating one more evicts the least recently used. | `1000` |
+| `SESSION_TTL_MINUTES` | Minutes of inactivity before a session expires. | `60` |
+| `MAX_SESSION_MESSAGES` | Most messages a session keeps; the oldest non-system messages are dropped first. | `200` |
 | `ALLOW_TOOLS` | Honour `"enable_tools": true` in requests. Tools run Bash/Write/Edit with permissions bypassed. When off, such requests get a 403. | `false` |
 | `CLAUDE_AUTH_METHOD` | Auth method: `cli`, `api_key`, `bedrock`, `vertex` | auto-detect |
 | `ANTHROPIC_API_KEY` | Direct Anthropic API key. Optional — also unlocks live `/v1/models` discovery and dynamic latest-Sonnet default. Not required when using Bedrock, Vertex, or Claude CLI subscription auth. | - |
@@ -475,7 +477,7 @@ Responses report the model that actually ran (e.g. `claude-haiku-5-5` for a requ
 
 **Effort and thinking:** on `/v1/chat/completions`, OpenAI `reasoning_effort` maps to Claude's effort level (`none`/`minimal` -> `low`, `low`, `medium`, `high`, `xhigh`). The `X-Claude-Effort` header (`low`, `medium`, `high`, `xhigh`, `max`) overrides it, and `X-Claude-Max-Thinking-Tokens` sets a thinking budget (`0` turns thinking off). `/v1/messages` accepts Anthropic's `thinking` and `output_config.effort`. `max_tokens` is ignored: Claude Code has no per-request output cap.
 
-Model names are checked before Claude Code runs. Names that are not Claude models (no `claude` in the name and not an alias, e.g. `gpt-4o`) get a 400 unless `MODEL_ALIASES` maps them. Other `claude-*` names are passed through, so new models work before this list is updated; if Claude Code does not know one, the request fails with a 400 (`model_not_found` on `/v1/chat/completions`, `invalid_request_error` on `/v1/messages`). Bedrock ARNs without `claude` in them need a `MODEL_ALIASES` entry.
+Model names are checked before Claude Code runs. Names that are not Claude models (no `claude` in the name and not an alias, e.g. `gpt-4o`) get a 400 unless `MODEL_ALIASES` maps them. Other `claude-*` names are passed through, so new models work before this list is updated; if Claude Code does not know one, the request fails with a 400 (`model_not_found` on `/v1/chat/completions`, `invalid_request_error` on `/v1/messages`). Bedrock ARNs without `claude` in them need a `MODEL_ALIASES` entry. Every error on `/v1/messages` (including 401, 403, 422, 429 and 5xx) uses the Anthropic shape `{"type": "error", "error": {"type": ..., "message": ...}}`; mid-stream failures arrive as an `error` event.
 
 ### Aliases
 `sonnet`, `opus`, `haiku`, `fable`, `best`, `opusplan`, `sonnet[1m]`, `opus[1m]` and `fable[1m]`. Claude Code resolves them to its current model of that family, and `/v1/models` lists them (unless `CLAUDE_MODELS_OVERRIDE` is set).
@@ -576,7 +578,8 @@ curl -X DELETE http://localhost:8000/v1/sessions/my-session
 
 ### Session Features
 
-- **Automatic Expiration**: Sessions expire after 1 hour of inactivity
+- **Automatic Expiration**: Sessions expire after `SESSION_TTL_MINUTES` (default 60) of inactivity
+- **Bounded History**: A session keeps at most `MAX_SESSION_MESSAGES` (default 200) messages, dropping the oldest first; a new system message replaces the stored one
 - **Streaming Support**: Session continuity works with both streaming and non-streaming requests
 - **Memory Persistence**: Full conversation history is maintained within the session
 - **Efficient Storage**: Only active sessions are kept in memory
@@ -668,7 +671,7 @@ curl http://localhost:8000/v1/auth/status | python -m json.tool
 Yes. Run `claude auth login` on the host, start claude-relay, and point the OpenAI SDK's `base_url` at `http://<host>:8000/v1`. Check the [Terms Compliance](#terms-compliance) section first: subscription use is for your own personal use.
 
 ### Does it support streaming?
-On `/v1/chat/completions` and `/v1/responses`, yes: pass `"stream": true` to get server-sent events. `/v1/messages` currently returns non-streaming responses only.
+Yes, on all three: pass `"stream": true` to get server-sent events. `/v1/messages` streams Anthropic events (`message_start` ... `message_stop`), so `client.messages.stream(...)` in the Anthropic SDK works. Claude Code hands over whole messages, so a short answer usually arrives as one text delta.
 
 ### Does it support OpenAI function calling?
 No. OpenAI-style `tools`/function calling is not mapped. Claude Code's own tools (Bash, Read, Write and others) can be turned on per request with `"enable_tools": true` once the server sets `ALLOW_TOOLS=true`.

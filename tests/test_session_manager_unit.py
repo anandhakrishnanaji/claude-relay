@@ -124,12 +124,11 @@ class TestSessionManager:
     @pytest.fixture
     def manager(self):
         """Create a fresh SessionManager for each test."""
-        return SessionManager(default_ttl_hours=1, cleanup_interval_minutes=5)
+        return SessionManager(cleanup_interval_minutes=5)
 
     def test_manager_initialization(self, manager):
         """SessionManager initializes with empty sessions."""
         assert len(manager.sessions) == 0
-        assert manager.default_ttl_hours == 1
         assert manager.cleanup_interval_minutes == 5
 
     def test_session_limit_evicts_least_recently_used(self):
@@ -320,7 +319,7 @@ class TestSessionManagerAsync:
     @pytest.fixture
     def manager(self):
         """Create a fresh SessionManager for each test."""
-        return SessionManager(default_ttl_hours=1, cleanup_interval_minutes=5)
+        return SessionManager(cleanup_interval_minutes=5)
 
     @pytest.mark.asyncio
     async def test_start_cleanup_task_creates_task(self, manager):
@@ -383,3 +382,40 @@ class TestSessionManagerThreadSafety:
         assert len(errors) == 0
         assert len(results) == 10
         assert len(manager.sessions) == 10
+
+
+class TestSessionHistory:
+    """The stored system prompt, the history cap and the TTL."""
+
+    def test_latest_system_message_replaces_stored_one(self):
+        manager = SessionManager()
+        for turn in range(3):
+            messages, _ = manager.process_messages(
+                [Message(role="system", content="SYS"), Message(role="user", content=f"q{turn}")],
+                "s",
+            )
+        assert [m.content for m in messages if m.role == "system"] == ["SYS"]
+        assert [m.content for m in messages if m.role == "user"] == ["q0", "q1", "q2"]
+        messages, _ = manager.process_messages([Message(role="system", content="NEW")], "s")
+        assert [m.content for m in messages if m.role == "system"] == ["NEW"]
+
+    def test_turn_without_system_keeps_stored_one(self):
+        manager = SessionManager()
+        manager.process_messages([Message(role="system", content="SYS")], "s")
+        messages, _ = manager.process_messages([Message(role="user", content="hi")], "s")
+        assert [m.content for m in messages] == ["SYS", "hi"]
+
+    def test_history_trimmed_oldest_non_system_first(self):
+        with patch("claude_relay.session_manager.MAX_SESSION_MESSAGES", 3):
+            session = Session(session_id="s")
+            session.add_messages([Message(role="system", content="SYS")])
+            session.add_messages([Message(role="user", content=str(i)) for i in range(4)])
+        assert [m.content for m in session.messages] == ["SYS", "2", "3"]
+
+    def test_ttl_from_setting(self):
+        with patch("claude_relay.session_manager.SESSION_TTL_MINUTES", 5):
+            session = Session(session_id="s")
+            assert timedelta(minutes=4) < session.expires_at - datetime.utcnow()
+            assert session.expires_at - datetime.utcnow() <= timedelta(minutes=5)
+            session.touch()
+            assert session.expires_at - datetime.utcnow() <= timedelta(minutes=5)
