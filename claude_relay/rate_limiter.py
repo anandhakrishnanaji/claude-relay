@@ -36,46 +36,33 @@ def rate_limit_exceeded_handler(request: Request, exc: RateLimitExceeded) -> JSO
     """Custom rate limit exceeded handler that returns JSON error response."""
     # Calculate retry after based on rate limit window (default 60 seconds)
     retry_after = 60
-    response = JSONResponse(
-        status_code=429,
-        content={
+    message = f"Rate limit exceeded. Try again in {retry_after} seconds."
+    if request.url.path.startswith("/v1/messages"):
+        content = {"type": "error", "error": {"type": "rate_limit_error", "message": message}}
+    else:
+        content = {
             "error": {
-                "message": f"Rate limit exceeded. Try again in {retry_after} seconds.",
+                "message": message,
                 "type": "rate_limit_exceeded",
                 "code": "too_many_requests",
                 "retry_after": retry_after,
             }
-        },
-        headers={"Retry-After": str(retry_after)},
-    )
-    return response
+        }
+    return JSONResponse(status_code=429, content=content, headers={"Retry-After": str(retry_after)})
+
+
+# endpoint -> (environment variable, default requests per minute)
+_RATE_LIMITS = {
+    "chat": ("RATE_LIMIT_CHAT_PER_MINUTE", 10),
+    "auth": ("RATE_LIMIT_AUTH_PER_MINUTE", 10),
+    "health": ("RATE_LIMIT_HEALTH_PER_MINUTE", 30),
+}
 
 
 def get_rate_limit_for_endpoint(endpoint: str) -> str:
-    """Get rate limit string for specific endpoint based on environment variables."""
-    # Default rate limits
-    defaults = {
-        "chat": "10/minute",
-        "auth": "10/minute",
-        "session": "15/minute",
-        "health": "30/minute",
-        "general": "30/minute",
-    }
-
-    # Environment variable mappings
-    env_mappings = {
-        "chat": "RATE_LIMIT_CHAT_PER_MINUTE",
-        "auth": "RATE_LIMIT_AUTH_PER_MINUTE",
-        "session": "RATE_LIMIT_SESSION_PER_MINUTE",
-        "health": "RATE_LIMIT_HEALTH_PER_MINUTE",
-        "general": "RATE_LIMIT_PER_MINUTE",
-    }
-
-    # Get rate limit from environment or use default
-    env_var = env_mappings.get(endpoint, "RATE_LIMIT_PER_MINUTE")
-    rate_per_minute = int(os.getenv(env_var, defaults.get(endpoint, "30").split("/")[0]))
-
-    return f"{rate_per_minute}/minute"
+    """Rate limit string for an endpoint group, from its environment variable."""
+    env_var, default = _RATE_LIMITS[endpoint]
+    return f"{int(os.getenv(env_var, default))}/minute"
 
 
 def rate_limit_endpoint(endpoint: str):

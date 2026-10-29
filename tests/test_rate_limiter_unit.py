@@ -163,17 +163,6 @@ class TestGetRateLimitForEndpoint:
             result = claude_relay.rate_limiter.get_rate_limit_for_endpoint("health")
             assert result == "30/minute"
 
-    def test_session_endpoint_default(self):
-        """Session endpoint has default rate limit."""
-        import importlib
-        import claude_relay.rate_limiter
-
-        env_copy = {k: v for k, v in os.environ.items() if k != "RATE_LIMIT_SESSION_PER_MINUTE"}
-        with patch.dict(os.environ, env_copy, clear=True):
-            importlib.reload(claude_relay.rate_limiter)
-            result = claude_relay.rate_limiter.get_rate_limit_for_endpoint("session")
-            assert result == "15/minute"
-
     def test_auth_endpoint_default(self):
         """Auth endpoint has default rate limit."""
         import importlib
@@ -185,17 +174,6 @@ class TestGetRateLimitForEndpoint:
             result = claude_relay.rate_limiter.get_rate_limit_for_endpoint("auth")
             assert result == "10/minute"
 
-    def test_general_endpoint_default(self):
-        """General/unknown endpoint has default rate limit."""
-        import importlib
-        import claude_relay.rate_limiter
-
-        env_copy = {k: v for k, v in os.environ.items() if k != "RATE_LIMIT_PER_MINUTE"}
-        with patch.dict(os.environ, env_copy, clear=True):
-            importlib.reload(claude_relay.rate_limiter)
-            result = claude_relay.rate_limiter.get_rate_limit_for_endpoint("general")
-            assert result == "30/minute"
-
     def test_custom_rate_limit_from_env(self):
         """Rate limit can be customized via environment variable."""
         import importlib
@@ -206,16 +184,12 @@ class TestGetRateLimitForEndpoint:
             result = claude_relay.rate_limiter.get_rate_limit_for_endpoint("chat")
             assert result == "50/minute"
 
-    def test_unknown_endpoint_uses_general_default(self):
-        """Unknown endpoint uses general rate limit."""
-        import importlib
+    def test_unknown_endpoint_is_an_error(self):
+        """Only the chat, auth and health groups exist."""
         import claude_relay.rate_limiter
 
-        env_copy = {k: v for k, v in os.environ.items() if k != "RATE_LIMIT_PER_MINUTE"}
-        with patch.dict(os.environ, env_copy, clear=True):
-            importlib.reload(claude_relay.rate_limiter)
-            result = claude_relay.rate_limiter.get_rate_limit_for_endpoint("unknown_endpoint")
-            assert result == "30/minute"
+        with pytest.raises(KeyError):
+            claude_relay.rate_limiter.get_rate_limit_for_endpoint("general")
 
 
 class TestRateLimitEndpointDecorator:
