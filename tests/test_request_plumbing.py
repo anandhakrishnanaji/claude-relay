@@ -12,7 +12,7 @@ import pytest
 from fastapi.testclient import TestClient
 
 import claude_relay.completion as completion
-import claude_relay.main as main
+from claude_relay.app import app
 from claude_relay import usage as sdk_usage
 
 MODEL = "claude-haiku-4-5-20251001"
@@ -45,7 +45,7 @@ def post(path, payload, chunks=None, headers=None):
         patch.object(completion, "validate_claude_code_auth", return_value=(True, {})),
         patch.object(completion.claude_cli, "run_completion", fake_run_completion),
     ):
-        client = TestClient(main.app, base_url="http://localhost")
+        client = TestClient(app, base_url="http://localhost")
         response = client.post(path, json=payload, headers=headers or {})
     return response, calls
 
@@ -293,6 +293,6 @@ class TestEffortAndFallback:
 
 
 def test_models_list_includes_aliases():
-    response = TestClient(main.app, base_url="http://localhost").get("/v1/models")
+    response = TestClient(app, base_url="http://localhost").get("/v1/models")
     ids = {model["id"] for model in response.json()["data"]}
     assert {"sonnet", "opus", "haiku", "claude-opus-5-5"} <= ids

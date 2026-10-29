@@ -107,3 +107,11 @@ class TestMain:
         with patch.dict(os.environ, {}), patch("uvicorn.run"):
             cli.main(["--host", "0.0.0.0", "--port", str(_free_port())])
         assert "WARNING" in capsys.readouterr().out
+
+
+def test_uvicorn_target_exposes_the_app():
+    """cli, Docker and systemd load "claude_relay.main:app"."""
+    from claude_relay.app import app
+    from claude_relay.main import app as main_app
+
+    assert main_app is app

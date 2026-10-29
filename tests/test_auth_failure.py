@@ -16,7 +16,7 @@ from fastapi.testclient import TestClient
 
 import claude_relay.auth as auth
 import claude_relay.errors as errors
-import claude_relay.main as main
+from claude_relay.app import app
 from claude_relay import usage as sdk_usage
 from claude_relay.claude_cli import ClaudeCodeCLI
 from claude_relay.completion import claude_login_error
@@ -54,7 +54,7 @@ def chat(chunks, **extra):
 
 
 def auth_status():
-    return TestClient(main.app, base_url="http://localhost").get("/v1/auth/status").json()
+    return TestClient(app, base_url="http://localhost").get("/v1/auth/status").json()
 
 
 class TestResultError:

@@ -8,7 +8,8 @@ import pytest
 from fastapi.testclient import TestClient
 
 import claude_relay.completion as completion
-import claude_relay.main as main
+from claude_relay.app import app
+from claude_relay import constants
 from claude_relay.constants import CLAUDE_TOOLS
 
 MODEL = "claude-haiku-4-5-20251001"
@@ -49,7 +50,7 @@ def _client(chunks):
         patch.object(completion, "validate_claude_code_auth", return_value=(True, {})),
         patch.object(completion.claude_cli, "run_completion", fake_run_completion),
     ):
-        yield TestClient(main.app, base_url="http://localhost"), captured
+        yield TestClient(app, base_url="http://localhost"), captured
 
 
 def test_string_input():
@@ -221,7 +222,7 @@ def test_non_claude_model_rejected_unless_mapped():
         assert r.status_code == 400
         assert r.json()["error"]["code"] == "model_not_found"
         assert opts == {}
-        with patch.object(main.constants, "MODEL_ALIASES", {"gpt-4o": "haiku"}):
+        with patch.object(constants, "MODEL_ALIASES", {"gpt-4o": "haiku"}):
             r = client.post("/v1/responses", json={"model": "gpt-4o", "input": "Say hi"})
     assert r.status_code == 200
     assert opts["model"] == "haiku"

@@ -14,7 +14,7 @@ from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
 import claude_relay.completion as completion
-import claude_relay.main as main
+from claude_relay.app import app
 import claude_relay.middleware as middleware
 from claude_relay.session_manager import session_manager
 from claude_relay import constants
@@ -30,7 +30,7 @@ EVIL_ORIGIN = "https://evil.example"
 
 
 def make_app(cors_origins=None, allowed_hosts=None):
-    """Build a minimal app with the same security middleware as main.app."""
+    """Build a minimal app with the same security middleware as the real app."""
     app = FastAPI()
 
     @app.get("/ping")
@@ -132,7 +132,7 @@ class TestTrustedHost:
         assert client.get("/ping", headers={"Host": "anything.example"}).status_code == 200
 
     def test_main_app_rejects_bad_host(self):
-        client = TestClient(main.app)
+        client = TestClient(app)
         response = client.get("/health", headers={"Host": "evil.example"})
         assert response.status_code == 400
 
@@ -163,9 +163,9 @@ class TestToolGate:
             patch.object(completion, "validate_claude_code_auth", return_value=(True, {})),
             patch.object(completion.claude_cli, "run_completion", fake_run_completion),
             patch.object(completion.claude_cli, "parse_claude_message", return_value="ok"),
-            patch.object(main.constants, "ALLOW_TOOLS", allow_tools),
+            patch.object(constants, "ALLOW_TOOLS", allow_tools),
         ):
-            client = TestClient(main.app, base_url="http://localhost")
+            client = TestClient(app, base_url="http://localhost")
             response = client.post(path, json=payload, headers=headers)
         return response, captured
 
@@ -263,7 +263,7 @@ class TestSessionEndpointsAuth:
         session_manager.get_or_create_session("abc")
         try:
             with patch.object(auth.auth_manager, "env_api_key", "secret-key"):
-                client = TestClient(main.app, base_url="http://localhost")
+                client = TestClient(app, base_url="http://localhost")
                 assert getattr(client, method)(path).status_code == 401
                 ok = getattr(client, method)(path, headers={"Authorization": "Bearer secret-key"})
                 assert ok.status_code == 200
@@ -279,7 +279,7 @@ class TestDiagnosticEndpoints:
         import claude_relay.auth as auth
 
         with patch.object(auth.auth_manager, "env_api_key", "secret-key"):
-            client = TestClient(main.app, base_url="http://localhost")
+            client = TestClient(app, base_url="http://localhost")
             assert getattr(client, method)(path).status_code == 401
             ok = getattr(client, method)(path, headers={"Authorization": "Bearer secret-key"})
             assert ok.status_code == 200
@@ -288,7 +288,7 @@ class TestDiagnosticEndpoints:
 class TestLogRedaction:
     def test_debug_log_masks_authorization(self, caplog):
         with patch.object(constants, "DEBUG_MODE", True), caplog.at_level("DEBUG"):
-            TestClient(main.app, base_url="http://localhost").get(
+            TestClient(app, base_url="http://localhost").get(
                 "/health", headers={"Authorization": "Bearer tok-123"}
             )
         assert any("Headers:" in r.getMessage() for r in caplog.records)
@@ -297,7 +297,7 @@ class TestLogRedaction:
     def test_validation_error_log_omits_input(self, caplog):
         body = {"model": "m", "messages": "my-secret-prompt"}
         with caplog.at_level("ERROR"):
-            response = TestClient(main.app, base_url="http://localhost").post(
+            response = TestClient(app, base_url="http://localhost").post(
                 "/v1/chat/completions", json=body
             )
         assert response.status_code == 422
@@ -309,7 +309,7 @@ class TestRequestSizeLimit:
     """MAX_REQUEST_SIZE holds for chunked bodies too, and a bad Content-Length is a 400."""
 
     def _client(self):
-        return TestClient(main.app, base_url="http://localhost")
+        return TestClient(app, base_url="http://localhost")
 
     def test_chunked_body_over_limit(self):
         def body():

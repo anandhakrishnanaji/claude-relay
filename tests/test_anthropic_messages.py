@@ -106,7 +106,8 @@ class TestAnthropicMessagesToolGating:
         from unittest.mock import patch
         from fastapi.testclient import TestClient
         import claude_relay.completion as completion
-        import claude_relay.main as main
+        from claude_relay.app import app
+        from claude_relay import constants
 
         captured = {}
 
@@ -118,10 +119,10 @@ class TestAnthropicMessagesToolGating:
             patch.object(completion, "validate_claude_code_auth", return_value=(True, {})),
             patch.object(completion.claude_cli, "run_completion", fake_run_completion),
             patch.object(completion.claude_cli, "parse_claude_message", return_value="ok"),
-            patch.object(main.constants, "ALLOW_TOOLS", allow_tools),
+            patch.object(constants, "ALLOW_TOOLS", allow_tools),
         ):
             # Host must pass the ALLOWED_HOSTS check (TestClient defaults to "testserver")
-            client = TestClient(main.app, base_url="http://localhost")
+            client = TestClient(app, base_url="http://localhost")
             response = client.post("/v1/messages", json=payload)
         return response, captured
 
@@ -230,7 +231,7 @@ class TestAnthropicMessagesEndpoint:
         from fastapi.testclient import TestClient
 
         import claude_relay.completion as completion
-        import claude_relay.main as main
+        from claude_relay.app import app
 
         async def fake_run_completion(**kwargs):
             if captured is not None:
@@ -245,7 +246,7 @@ class TestAnthropicMessagesEndpoint:
         stack.enter_context(
             patch.object(completion.claude_cli, "run_completion", fake_run_completion)
         )
-        return stack, TestClient(main.app, base_url="http://localhost")
+        return stack, TestClient(app, base_url="http://localhost")
 
     def _sdk(self, chunks, captured=None):
         """The real anthropic client talking to the app; returns (patches, client)."""

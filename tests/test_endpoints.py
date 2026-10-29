@@ -8,7 +8,7 @@ def test_agentic_client_payload_accepted():
     from unittest.mock import patch
     from fastapi.testclient import TestClient
     import claude_relay.completion as completion
-    import claude_relay.main as main
+    from claude_relay.app import app
 
     captured = {}
 
@@ -49,7 +49,7 @@ def test_agentic_client_payload_accepted():
         patch.object(completion.claude_cli, "run_completion", fake_run_completion),
         patch.object(completion.claude_cli, "parse_claude_message", return_value="It is sunny."),
     ):
-        response = TestClient(main.app, base_url="http://localhost").post(
+        response = TestClient(app, base_url="http://localhost").post(
             "/v1/chat/completions", json=payload
         )
 

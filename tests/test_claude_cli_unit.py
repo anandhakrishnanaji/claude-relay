@@ -737,14 +737,15 @@ def test_startup_runs_cli_check_only_for_cli_login(method, expected_calls):
 
     from fastapi.testclient import TestClient
 
-    import claude_relay.main as main
+    import claude_relay.app as app_module
 
     verify = AsyncMock(return_value=True)
+    auth = (True, {"method": method})
     with (
-        patch.object(main, "validate_claude_code_auth", return_value=(True, {"method": method})),
-        patch.object(main.claude_cli, "verify_cli", verify),
-        patch.object(main, "resolve_default_model", AsyncMock(return_value=None)),
-        TestClient(main.app, base_url="http://localhost"),
+        patch.object(app_module, "validate_claude_code_auth", return_value=auth),
+        patch.object(app_module.claude_cli, "verify_cli", verify),
+        patch.object(app_module, "resolve_default_model", AsyncMock(return_value=None)),
+        TestClient(app_module.app, base_url="http://localhost"),
     ):
         pass
     assert verify.await_count == expected_calls

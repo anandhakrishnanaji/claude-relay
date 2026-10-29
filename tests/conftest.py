@@ -14,8 +14,8 @@ def reset_rate_limiter():
     Uses the app's limiter rather than claude_relay.rate_limiter.limiter, which
     test_rate_limiter_unit replaces by reloading the module.
     """
-    main = sys.modules.get("claude_relay.main")
-    limiter = getattr(main.app.state, "limiter", None) if main else None
+    app_module = sys.modules.get("claude_relay.app")
+    limiter = getattr(app_module.app.state, "limiter", None) if app_module else None
     if limiter:
         limiter.reset()
     yield

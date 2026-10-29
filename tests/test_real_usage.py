@@ -14,7 +14,7 @@ from fastapi.testclient import TestClient
 
 import claude_relay.completion as completion
 import claude_relay.errors as errors
-import claude_relay.main as main
+from claude_relay.app import app
 from claude_relay import usage as sdk_usage
 
 MODEL = "claude-haiku-4-5-20251001"
@@ -52,7 +52,7 @@ def post(path, payload, chunks):
         patch.object(completion, "validate_claude_code_auth", return_value=(True, {})),
         patch.object(completion.claude_cli, "run_completion", fake_run_completion),
     ):
-        return TestClient(main.app, base_url="http://localhost").post(path, json=payload)
+        return TestClient(app, base_url="http://localhost").post(path, json=payload)
 
 
 def chat(chunks, **extra):
