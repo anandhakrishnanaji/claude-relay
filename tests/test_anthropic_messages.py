@@ -6,6 +6,11 @@ This endpoint provides compatibility with the native Anthropic SDK,
 enabling tools like VC to use this wrapper via custom base URL configuration.
 """
 
+from contextlib import ExitStack
+from unittest.mock import patch
+
+import pytest
+
 
 class TestAnthropicMessagesModels:
     """Test Anthropic API model classes."""
@@ -212,3 +217,155 @@ class TestAnthropicMessagesToolGating:
         assert 'Assistant: Reading it.\nTool call: read_file({"path": "a.txt"})' in prompt
         assert "Tool result (toolu_1): hello world" in prompt
         assert "base64" not in prompt
+
+
+MODEL = "claude-haiku-4-5-20251001"
+
+
+class TestAnthropicMessagesEndpoint:
+    """/v1/messages prompt, errors and streaming, checked with the real anthropic SDK."""
+
+    def _http(self, chunks, captured=None):
+        """Patched Claude Code run plus a TestClient; returns (patches, client)."""
+        from fastapi.testclient import TestClient
+
+        import claude_relay.completion as completion
+        import claude_relay.main as main
+
+        async def fake_run_completion(**kwargs):
+            if captured is not None:
+                captured.update(kwargs)
+            for chunk in chunks:
+                yield chunk
+
+        stack = ExitStack()
+        stack.enter_context(
+            patch.object(completion, "validate_claude_code_auth", return_value=(True, {}))
+        )
+        stack.enter_context(
+            patch.object(completion.claude_cli, "run_completion", fake_run_completion)
+        )
+        return stack, TestClient(main.app, base_url="http://localhost")
+
+    def _sdk(self, chunks, captured=None):
+        """The real anthropic client talking to the app; returns (patches, client)."""
+        # Not a dev dependency yet; run with `--with anthropic`
+        anthropic = pytest.importorskip("anthropic")
+        httpx2 = pytest.importorskip("httpx2")
+        stack, http = self._http(chunks, captured)
+
+        def forward(request):
+            # The SDK uses httpx2, so hand each request to the (httpx) TestClient
+            response = http.request(
+                request.method, str(request.url), headers=request.headers, content=request.read()
+            )
+            return httpx2.Response(
+                response.status_code, headers=response.headers, content=response.content
+            )
+
+        client = anthropic.Anthropic(
+            api_key="x",
+            base_url="http://localhost",
+            http_client=httpx2.Client(transport=httpx2.MockTransport(forward)),
+            max_retries=0,
+        )
+        return stack, client
+
+    def _chunks(self, text="Hello there", is_error=False, **extra):
+        return [
+            {"content": [{"type": "text", "text": text}], "model": MODEL, **extra},
+            {
+                "subtype": "success",
+                "is_error": is_error,
+                "result": text,
+                "stop_reason": "end_turn",
+                "usage": {"input_tokens": 7, "output_tokens": 2},
+            },
+        ]
+
+    def test_prompt_uses_chat_builder(self):
+        captured = {}
+        stack, client = self._sdk(self._chunks(), captured)
+        with stack:
+            client.messages.create(
+                model=MODEL,
+                max_tokens=10,
+                messages=[
+                    {"role": "user", "content": "one"},
+                    {"role": "assistant", "content": "two"},
+                    {"role": "user", "content": "three"},
+                ],
+            )
+        assert captured["prompt"] == "Human: one\n\nAssistant: two\n\nHuman: three"
+
+    def test_stream_with_sdk(self):
+        stack, client = self._sdk(self._chunks())
+        with (
+            stack,
+            client.messages.stream(
+                model=MODEL, max_tokens=10, messages=[{"role": "user", "content": "hi"}]
+            ) as stream,
+        ):
+            events = [event.type for event in stream]
+            message = stream.get_final_message()
+        assert events[0] == "message_start"
+        assert "content_block_delta" in events and events[-1] == "message_stop"
+        assert message.content[0].text == "Hello there"
+        assert message.model == MODEL
+        assert message.stop_reason == "end_turn"
+        assert message.usage.input_tokens == 7 and message.usage.output_tokens == 2
+
+    def test_stream_error_event(self):
+        chunks = self._chunks("API Error: 429", is_error=True, error="rate_limit")
+        chunks[1]["api_error_status"] = 429
+        stack, client = self._sdk(chunks)
+        with stack, pytest.raises(Exception) as raised:
+            with client.messages.stream(
+                model=MODEL, max_tokens=10, messages=[{"role": "user", "content": "hi"}]
+            ) as stream:
+                stream.get_final_message()
+        assert type(raised.value).__name__ == "APIStatusError"
+        assert raised.value.body["error"]["type"] == "rate_limit_error"
+
+    def test_unknown_model_stream_is_400(self):
+        stack, client = self._sdk(self._chunks())
+        with stack, pytest.raises(Exception) as raised:
+            with client.messages.stream(
+                model="gpt-4o", max_tokens=10, messages=[{"role": "user", "content": "hi"}]
+            ) as stream:
+                stream.get_final_message()
+        assert type(raised.value).__name__ == "BadRequestError"
+        assert raised.value.body["type"] == "error"
+
+    @pytest.mark.parametrize(
+        "payload,status,error_type",
+        [
+            ({"messages": "nope"}, 422, "invalid_request_error"),
+            ({"model": MODEL, "messages": [], "enable_tools": True}, 403, "permission_error"),
+        ],
+    )
+    def test_errors_in_anthropic_format(self, payload, status, error_type):
+        stack, http = self._http(self._chunks())
+        with stack:
+            response = http.post("/v1/messages", json=payload)
+        assert response.status_code == status
+        assert response.json()["type"] == "error"
+        assert response.json()["error"]["type"] == error_type
+
+    def test_auth_not_configured_is_anthropic_503(self):
+        import claude_relay.completion as completion
+
+        stack, http = self._http(self._chunks())
+        not_configured = (False, {"errors": ["no key"]})
+        with (
+            stack,
+            patch.object(completion, "validate_claude_code_auth", return_value=not_configured),
+        ):
+            response = http.post(
+                "/v1/messages",
+                json={"model": MODEL, "messages": [{"role": "user", "content": "hi"}]},
+            )
+        assert response.status_code == 503
+        body = response.json()
+        assert body["type"] == "error" and body["error"]["type"] == "api_error"
+        assert "no key" in body["error"]["message"]
