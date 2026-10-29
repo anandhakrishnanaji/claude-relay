@@ -728,3 +728,23 @@ class TestClaudeCodeCLICleanupException:
 
         if os.path.exists(temp_dir):
             shutil.rmtree(temp_dir)
+
+
+@pytest.mark.parametrize("method,expected_calls", [("claude_cli", 1), ("anthropic", 0)])
+def test_startup_runs_cli_check_only_for_cli_login(method, expected_calls):
+    """`claude auth status` says nothing useful under API key, Bedrock or Vertex auth."""
+    from unittest.mock import AsyncMock, patch
+
+    from fastapi.testclient import TestClient
+
+    import claude_relay.main as main
+
+    verify = AsyncMock(return_value=True)
+    with (
+        patch.object(main, "validate_claude_code_auth", return_value=(True, {"method": method})),
+        patch.object(main.claude_cli, "verify_cli", verify),
+        patch.object(main, "resolve_default_model", AsyncMock(return_value=None)),
+        TestClient(main.app, base_url="http://localhost"),
+    ):
+        pass
+    assert verify.await_count == expected_calls
