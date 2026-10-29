@@ -4,12 +4,13 @@ import asyncio
 
 import pytest
 
-from claude_relay import constants, main
+from claude_relay import constants
+from claude_relay.routers import models as model_list
 
 
 @pytest.mark.asyncio
 async def test_get_available_models_uses_anthropic_models_api(monkeypatch):
-    main._model_list_cache = {"expires_at": 0.0, "models": None}
+    model_list._model_list_cache = {"expires_at": 0.0, "models": None}
 
     async def fake_fetch():
         return [
@@ -22,9 +23,9 @@ async def test_get_available_models_uses_anthropic_models_api(monkeypatch):
         ]
 
     monkeypatch.delenv("CLAUDE_MODELS_OVERRIDE", raising=False)
-    monkeypatch.setattr(main, "_fetch_anthropic_models", fake_fetch)
+    monkeypatch.setattr(model_list, "_fetch_anthropic_models", fake_fetch)
 
-    models = await main.get_available_models()
+    models = await model_list.get_available_models()
 
     assert models[0]["id"] == "claude-test-latest"
     assert models[0]["display_name"] == "Claude Test Latest"
@@ -32,37 +33,37 @@ async def test_get_available_models_uses_anthropic_models_api(monkeypatch):
 
 @pytest.mark.asyncio
 async def test_get_available_models_falls_back_to_constants(monkeypatch):
-    main._model_list_cache = {"expires_at": 0.0, "models": None}
+    model_list._model_list_cache = {"expires_at": 0.0, "models": None}
 
     async def fake_fetch():
         return None
 
     monkeypatch.delenv("CLAUDE_MODELS_OVERRIDE", raising=False)
-    monkeypatch.setattr(main, "_fetch_anthropic_models", fake_fetch)
+    monkeypatch.setattr(model_list, "_fetch_anthropic_models", fake_fetch)
 
-    models = await main.get_available_models()
+    models = await model_list.get_available_models()
 
     assert {model["id"] for model in models} >= {"claude-sonnet-4-6", "claude-opus-4-6"}
 
 
 @pytest.mark.asyncio
 async def test_model_override_skips_live_fetch(monkeypatch):
-    main._model_list_cache = {"expires_at": 0.0, "models": None}
+    model_list._model_list_cache = {"expires_at": 0.0, "models": None}
 
     async def fake_fetch():
         raise AssertionError("override should not call live Anthropic API")
 
     monkeypatch.setenv("CLAUDE_MODELS_OVERRIDE", "custom-a,custom-b")
-    monkeypatch.setattr(main, "CLAUDE_MODELS", ["custom-a", "custom-b"])
-    monkeypatch.setattr(main, "_fetch_anthropic_models", fake_fetch)
+    monkeypatch.setattr(model_list, "CLAUDE_MODELS", ["custom-a", "custom-b"])
+    monkeypatch.setattr(model_list, "_fetch_anthropic_models", fake_fetch)
 
-    models = await main.get_available_models()
+    models = await model_list.get_available_models()
 
     assert [model["id"] for model in models] == ["custom-a", "custom-b"]
 
 
 def test_openai_model_from_anthropic_preserves_metadata():
-    model = main._openai_model_from_anthropic(
+    model = model_list._openai_model_from_anthropic(
         {
             "id": "claude-test",
             "type": "model",
@@ -83,7 +84,7 @@ def test_openai_model_from_anthropic_preserves_metadata():
 
 
 def test_fallback_objects_include_created_field():
-    fallback = main._fallback_model_payload()
+    fallback = model_list._fallback_model_payload()
 
     assert fallback, "fallback list should not be empty"
     for entry in fallback:
@@ -93,7 +94,7 @@ def test_fallback_objects_include_created_field():
 @pytest.mark.asyncio
 async def test_concurrent_calls_only_fetch_once(monkeypatch):
     """Lock + double-check should prevent thundering-herd on cache expiry."""
-    main._model_list_cache = {"expires_at": 0.0, "models": None}
+    model_list._model_list_cache = {"expires_at": 0.0, "models": None}
     call_count = 0
 
     async def fake_fetch():
@@ -103,9 +104,9 @@ async def test_concurrent_calls_only_fetch_once(monkeypatch):
         return [{"id": "claude-test", "object": "model", "owned_by": "anthropic"}]
 
     monkeypatch.delenv("CLAUDE_MODELS_OVERRIDE", raising=False)
-    monkeypatch.setattr(main, "_fetch_anthropic_models", fake_fetch)
+    monkeypatch.setattr(model_list, "_fetch_anthropic_models", fake_fetch)
 
-    results = await asyncio.gather(*[main.get_available_models() for _ in range(8)])
+    results = await asyncio.gather(*[model_list.get_available_models() for _ in range(8)])
 
     assert call_count == 1
     for r in results:
@@ -114,19 +115,19 @@ async def test_concurrent_calls_only_fetch_once(monkeypatch):
 
 @pytest.mark.asyncio
 async def test_failed_fetch_uses_short_error_ttl(monkeypatch):
-    main._model_list_cache = {"expires_at": 0.0, "models": None}
+    model_list._model_list_cache = {"expires_at": 0.0, "models": None}
 
     async def fake_fetch():
         return None
 
     monkeypatch.delenv("CLAUDE_MODELS_OVERRIDE", raising=False)
-    monkeypatch.setattr(main, "_fetch_anthropic_models", fake_fetch)
-    monkeypatch.setattr(main, "MODEL_LIST_CACHE_TTL_SECONDS", 3600)
-    monkeypatch.setattr(main, "MODEL_LIST_ERROR_TTL_SECONDS", 60)
+    monkeypatch.setattr(model_list, "_fetch_anthropic_models", fake_fetch)
+    monkeypatch.setattr(model_list, "MODEL_LIST_CACHE_TTL_SECONDS", 3600)
+    monkeypatch.setattr(model_list, "MODEL_LIST_ERROR_TTL_SECONDS", 60)
 
-    await main.get_available_models()
+    await model_list.get_available_models()
 
-    expires_at = main._model_list_cache["expires_at"]
+    expires_at = model_list._model_list_cache["expires_at"]
     # Error TTL ~60s; success TTL ~3600s. Confirm we used the short one.
     import time as _time
 
@@ -140,18 +141,18 @@ def test_pick_latest_sonnet_prefers_newest_created_at():
         {"id": "claude-opus-4-6", "created_at": "2026-04-15T00:00:00Z"},
     ]
 
-    assert main._pick_latest_sonnet(models) == "claude-sonnet-4-6"
+    assert model_list._pick_latest_sonnet(models) == "claude-sonnet-4-6"
 
 
 def test_pick_latest_sonnet_returns_none_when_no_sonnet():
     models = [{"id": "claude-haiku-4-5", "created_at": "2025-10-01T00:00:00Z"}]
 
-    assert main._pick_latest_sonnet(models) is None
+    assert model_list._pick_latest_sonnet(models) is None
 
 
 @pytest.mark.asyncio
 async def test_resolve_default_model_sets_constants(monkeypatch):
-    main._model_list_cache = {"expires_at": 0.0, "models": None}
+    model_list._model_list_cache = {"expires_at": 0.0, "models": None}
     constants.RESOLVED_DEFAULT_MODEL = None
 
     async def fake_fetch():
@@ -173,9 +174,9 @@ async def test_resolve_default_model_sets_constants(monkeypatch):
     monkeypatch.delenv("CLAUDE_MODELS_OVERRIDE", raising=False)
     monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-ant-test")
     monkeypatch.setattr(constants, "DEFAULT_MODEL_ENV", None)
-    monkeypatch.setattr(main, "_fetch_anthropic_models", fake_fetch)
+    monkeypatch.setattr(model_list, "_fetch_anthropic_models", fake_fetch)
 
-    resolved = await main.resolve_default_model()
+    resolved = await model_list.resolve_default_model()
 
     assert resolved == "claude-sonnet-4-7"
     assert constants.RESOLVED_DEFAULT_MODEL == "claude-sonnet-4-7"
@@ -191,10 +192,10 @@ async def test_resolve_default_model_skips_without_api_key(monkeypatch, caplog):
 
     monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
     monkeypatch.setattr(constants, "DEFAULT_MODEL_ENV", None)
-    monkeypatch.setattr(main, "_fetch_anthropic_models", fake_fetch)
+    monkeypatch.setattr(model_list, "_fetch_anthropic_models", fake_fetch)
 
-    with caplog.at_level("INFO", logger="claude_relay.main"):
-        resolved = await main.resolve_default_model()
+    with caplog.at_level("INFO", logger="claude_relay.routers.models"):
+        resolved = await model_list.resolve_default_model()
 
     assert resolved is None
     assert constants.RESOLVED_DEFAULT_MODEL is None
@@ -203,16 +204,16 @@ async def test_resolve_default_model_skips_without_api_key(monkeypatch, caplog):
 
 @pytest.mark.asyncio
 async def test_resolve_default_model_honors_env_override(monkeypatch):
-    main._model_list_cache = {"expires_at": 0.0, "models": None}
+    model_list._model_list_cache = {"expires_at": 0.0, "models": None}
     constants.RESOLVED_DEFAULT_MODEL = None
 
     async def fake_fetch():
         raise AssertionError("env override should short-circuit fetch")
 
     monkeypatch.setattr(constants, "DEFAULT_MODEL_ENV", "claude-opus-4-6")
-    monkeypatch.setattr(main, "_fetch_anthropic_models", fake_fetch)
+    monkeypatch.setattr(model_list, "_fetch_anthropic_models", fake_fetch)
 
-    resolved = await main.resolve_default_model()
+    resolved = await model_list.resolve_default_model()
 
     assert resolved == "claude-opus-4-6"
     assert constants.RESOLVED_DEFAULT_MODEL is None
