@@ -56,7 +56,6 @@ def get_rate_limit_for_endpoint(endpoint: str) -> str:
     # Default rate limits
     defaults = {
         "chat": "10/minute",
-        "debug": "2/minute",
         "auth": "10/minute",
         "session": "15/minute",
         "health": "30/minute",
@@ -66,7 +65,6 @@ def get_rate_limit_for_endpoint(endpoint: str) -> str:
     # Environment variable mappings
     env_mappings = {
         "chat": "RATE_LIMIT_CHAT_PER_MINUTE",
-        "debug": "RATE_LIMIT_DEBUG_PER_MINUTE",
         "auth": "RATE_LIMIT_AUTH_PER_MINUTE",
         "session": "RATE_LIMIT_SESSION_PER_MINUTE",
         "health": "RATE_LIMIT_HEALTH_PER_MINUTE",

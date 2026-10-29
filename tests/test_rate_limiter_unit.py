@@ -152,18 +152,6 @@ class TestGetRateLimitForEndpoint:
             result = claude_relay.rate_limiter.get_rate_limit_for_endpoint("chat")
             assert result == "10/minute"
 
-    def test_debug_endpoint_default(self):
-        """Debug endpoint has default rate limit."""
-        import importlib
-        import claude_relay.rate_limiter
-
-        # Clear any override
-        env_copy = {k: v for k, v in os.environ.items() if k != "RATE_LIMIT_DEBUG_PER_MINUTE"}
-        with patch.dict(os.environ, env_copy, clear=True):
-            importlib.reload(claude_relay.rate_limiter)
-            result = claude_relay.rate_limiter.get_rate_limit_for_endpoint("debug")
-            assert result == "2/minute"
-
     def test_health_endpoint_default(self):
         """Health endpoint has default rate limit."""
         import importlib

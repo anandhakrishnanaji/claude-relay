@@ -241,39 +241,6 @@ class TestToolGate:
         assert opts["permission_mode"] == "bypassPermissions"
 
 
-class TestMCPGate:
-    """MCP registration/connect launch a client-chosen command, so they need ALLOW_TOOLS."""
-
-    SERVER = {"name": "x", "command": "sh", "args": ["-c", "true"]}
-
-    @pytest.mark.parametrize(
-        "path,payload",
-        [("/v1/mcp/servers", SERVER), ("/v1/mcp/connect", {"server_name": "x"})],
-    )
-    def test_refused_without_allow_tools(self, path, payload):
-        with (
-            patch.object(main.constants, "ALLOW_TOOLS", False),
-            patch.object(main.mcp_client, "register_server") as register,
-            patch.object(main.mcp_client, "connect_server") as connect,
-        ):
-            response = TestClient(main.app, base_url="http://localhost").post(path, json=payload)
-        assert response.status_code == 403
-        register.assert_not_called()
-        connect.assert_not_called()
-
-    def test_register_allowed_with_allow_tools(self):
-        with (
-            patch.object(main.constants, "ALLOW_TOOLS", True),
-            patch.object(main.mcp_client, "is_available", return_value=True),
-            patch.object(main.mcp_client, "register_server") as register,
-        ):
-            response = TestClient(main.app, base_url="http://localhost").post(
-                "/v1/mcp/servers", json=self.SERVER
-            )
-        assert response.status_code == 200
-        register.assert_called_once()
-
-
 class TestSessionEndpointsAuth:
     """The /v1/sessions endpoints need the API key when one is configured."""
 
@@ -301,11 +268,9 @@ class TestSessionEndpointsAuth:
 
 
 class TestDiagnosticEndpoints:
-    """/v1/auth/status and /v1/debug/request need the API key, and never echo credentials."""
+    """/v1/auth/status needs the API key."""
 
-    @pytest.mark.parametrize(
-        "method,path", [("get", "/v1/auth/status"), ("post", "/v1/debug/request")]
-    )
+    @pytest.mark.parametrize("method,path", [("get", "/v1/auth/status")])
     def test_requires_api_key(self, method, path):
         import claude_relay.auth as auth
 
@@ -314,17 +279,6 @@ class TestDiagnosticEndpoints:
             assert getattr(client, method)(path).status_code == 401
             ok = getattr(client, method)(path, headers={"Authorization": "Bearer secret-key"})
             assert ok.status_code == 200
-
-    def test_debug_request_redacts_credentials(self):
-        response = TestClient(main.app, base_url="http://localhost").post(
-            "/v1/debug/request",
-            json={"model": "m", "messages": []},
-            headers={"Authorization": "Bearer tok-123", "X-Api-Key": "k-456"},
-        )
-        assert response.status_code == 200
-        assert "tok-123" not in response.text
-        assert "k-456" not in response.text
-        assert response.json()["debug_info"]["headers"]["authorization"] == "[REDACTED]"
 
 
 class TestLogRedaction:

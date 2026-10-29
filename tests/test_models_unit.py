@@ -20,20 +20,8 @@ from claude_relay.models import (
     ChatCompletionResponse,
     StreamChoice,
     ChatCompletionStreamResponse,
-    ErrorDetail,
-    ErrorResponse,
     SessionInfo,
     SessionListResponse,
-    ToolMetadataResponse,
-    ToolListResponse,
-    ToolConfigurationResponse,
-    ToolConfigurationRequest,
-    ToolValidationResponse,
-    MCPServerConfigRequest,
-    MCPServerInfoResponse,
-    MCPServersListResponse,
-    MCPConnectionRequest,
-    MCPToolCallRequest,
     AnthropicTextBlock,
     AnthropicMessage,
     AnthropicMessagesRequest,
@@ -429,23 +417,6 @@ class TestChatCompletionStreamResponse:
         assert response.usage.total_tokens == 15
 
 
-class TestErrorModels:
-    """Test error response models."""
-
-    def test_error_detail(self):
-        """Can create ErrorDetail."""
-        error = ErrorDetail(message="Something went wrong", type="invalid_request")
-        assert error.message == "Something went wrong"
-        assert error.type == "invalid_request"
-
-    def test_error_response(self):
-        """Can create ErrorResponse."""
-        response = ErrorResponse(
-            error=ErrorDetail(message="Bad request", type="invalid_request", code="400")
-        )
-        assert response.error.code == "400"
-
-
 class TestSessionModels:
     """Test session-related models."""
 
@@ -478,127 +449,6 @@ class TestSessionModels:
             total=1,
         )
         assert response.total == 1
-
-
-class TestToolModels:
-    """Test tool-related models."""
-
-    def test_tool_metadata_response(self):
-        """Can create ToolMetadataResponse."""
-        tool = ToolMetadataResponse(
-            name="Read",
-            description="Read a file",
-            category="filesystem",
-            parameters={"path": "string"},
-            examples=["Read file.txt"],
-            is_safe=True,
-            requires_network=False,
-        )
-        assert tool.name == "Read"
-
-    def test_tool_list_response(self):
-        """Can create ToolListResponse."""
-        response = ToolListResponse(tools=[], total=0)
-        assert response.total == 0
-
-    def test_tool_configuration_response(self):
-        """Can create ToolConfigurationResponse."""
-        now = datetime.utcnow()
-        response = ToolConfigurationResponse(
-            allowed_tools=["Read"],
-            effective_tools=["Read", "Write"],
-            created_at=now,
-            updated_at=now,
-        )
-        assert "Read" in response.allowed_tools
-
-    def test_tool_configuration_request(self):
-        """Can create ToolConfigurationRequest."""
-        request = ToolConfigurationRequest(allowed_tools=["Read", "Write"], session_id="test")
-        assert len(request.allowed_tools) == 2
-
-    def test_tool_validation_response(self):
-        """Can create ToolValidationResponse."""
-        response = ToolValidationResponse(
-            valid={"Read": True, "Invalid": False}, invalid_tools=["Invalid"]
-        )
-        assert "Invalid" in response.invalid_tools
-
-
-class TestMCPModels:
-    """Test MCP-related models."""
-
-    def test_mcp_server_config_request(self):
-        """Can create MCPServerConfigRequest."""
-        config = MCPServerConfigRequest(
-            name="test-server",
-            command="node",
-            args=["server.js"],
-            description="Test MCP server",
-        )
-        assert config.name == "test-server"
-
-    def test_mcp_server_name_validation(self):
-        """Server name is validated."""
-        # Valid name
-        config = MCPServerConfigRequest(name="my-server.v1", command="node")
-        assert config.name == "my-server.v1"
-
-        # Empty name
-        with pytest.raises(ValueError):
-            MCPServerConfigRequest(name="", command="node")
-
-        # Invalid characters
-        with pytest.raises(ValueError):
-            MCPServerConfigRequest(name="server name with spaces", command="node")
-
-    def test_mcp_server_command_validation(self):
-        """Server command is validated."""
-        with pytest.raises(ValueError):
-            MCPServerConfigRequest(name="server", command="")
-
-    def test_mcp_server_info_response(self):
-        """Can create MCPServerInfoResponse."""
-        info = MCPServerInfoResponse(
-            name="test",
-            command="node",
-            args=[],
-            description="Test",
-            enabled=True,
-            connected=False,
-            tools_count=5,
-        )
-        assert info.tools_count == 5
-
-    def test_mcp_servers_list_response(self):
-        """Can create MCPServersListResponse."""
-        response = MCPServersListResponse(servers=[], total=0)
-        assert response.total == 0
-
-    def test_mcp_connection_request(self):
-        """Can create MCPConnectionRequest."""
-        request = MCPConnectionRequest(server_name="my-server")
-        assert request.server_name == "my-server"
-
-    def test_mcp_connection_request_validation(self):
-        """Server name in connection request is validated."""
-        with pytest.raises(ValueError):
-            MCPConnectionRequest(server_name="")
-
-    def test_mcp_tool_call_request(self):
-        """Can create MCPToolCallRequest."""
-        request = MCPToolCallRequest(
-            server_name="server", tool_name="read_file", arguments={"path": "/tmp/test"}
-        )
-        assert request.tool_name == "read_file"
-
-    def test_mcp_tool_call_request_validation(self):
-        """Tool call request validates names."""
-        with pytest.raises(ValueError):
-            MCPToolCallRequest(server_name="", tool_name="tool")
-
-        with pytest.raises(ValueError):
-            MCPToolCallRequest(server_name="server", tool_name="")
 
 
 class TestAnthropicModels:

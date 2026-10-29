@@ -8,6 +8,7 @@ run_completion is mocked and records the keyword arguments it was called with.
 import json
 from unittest.mock import patch
 
+import pytest
 from fastapi.testclient import TestClient
 
 import claude_relay.main as main
@@ -49,7 +50,7 @@ def post(path, payload, chunks=None, headers=None):
 
 
 class TestPromptPassthrough:
-    """Incoming prompts reach the SDK unchanged; filter_content is output-only."""
+    """Incoming prompts reach the SDK unchanged."""
 
     def chat_payload(self, **extra):
         return {
@@ -95,10 +96,17 @@ class TestPromptPassthrough:
         assert response.status_code == 200
         assert "Assistant: <read_file><path>a.txt</path></read_file>" in calls[0]["prompt"]
 
-    def test_output_still_filtered(self):
-        chunks = make_chunks(text="<thinking>secret</thinking>Answer")
+    @pytest.mark.parametrize(
+        "text", ["<read_file><path>a.txt</path></read_file>", "<thinking>plan</thinking>"]
+    )
+    def test_output_passes_through(self, text):
+        # Cline-style tool tags are the client's tool calls; nothing is stripped or invented
+        chunks = make_chunks(text=text)
         response, _ = post("/v1/chat/completions", self.chat_payload(), chunks)
-        assert response.json()["choices"][0]["message"]["content"] == "Answer"
+        assert response.json()["choices"][0]["message"]["content"] == text
+        response, _ = post("/v1/chat/completions", self.chat_payload(stream=True), chunks)
+        deltas = [e["choices"][0]["delta"].get("content") for e in stream_events(response)]
+        assert "".join(d for d in deltas if d) == text
 
 
 REAL_MODEL = "claude-haiku-5-5"

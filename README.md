@@ -68,12 +68,8 @@ It runs on the official [Claude Agent SDK](https://pypi.org/project/claude-agent
 **2.3.0:**
 - **Live `/v1/models` discovery:** When `ANTHROPIC_API_KEY` is set, the wrapper fetches Anthropic's live model list (cached) instead of serving the static fallback
 - **Dynamic default Sonnet:** `DEFAULT_MODEL` resolves to the latest Sonnet at startup when `ANTHROPIC_API_KEY` is configured; falls back to `claude-sonnet-4-6` otherwise
-- **Operator overrides:** New `CLAUDE_MODELS_OVERRIDE`, `FAST_MODEL`, and `MODEL_LIST_*` env vars
+- **Operator overrides:** New `CLAUDE_MODELS_OVERRIDE` and `MODEL_LIST_*` env vars
 - **Updated catalog:** Claude 4.6 family added to the static fallback list
-
-**Migration Resources:**
-- [docs/MIGRATION_STATUS.md](./docs/MIGRATION_STATUS.md) - Detailed v2.0.0 migration status
-- [docs/UPGRADE_PLAN.md](./docs/UPGRADE_PLAN.md) - Comprehensive migration strategy and technical details
 
 ## Features
 
@@ -87,7 +83,6 @@ It runs on the official [Claude Agent SDK](https://pypi.org/project/claude-agent
 
 ### 🛠 **Claude Agent SDK Integration**
 - **Official Claude Agent SDK** integration
-- **Real-time cost tracking** - actual costs from SDK metadata
 - **Accurate token counting** - input/output tokens from SDK
 - **Session management** - proper session IDs and continuity
 - **Enhanced error handling** with detailed authentication diagnostics
@@ -156,9 +151,6 @@ uv venv .venv && uv pip install --python .venv/bin/python -e .
 Settings come from command-line flags, then environment variables, then a `.env` file in the directory you run `claude-relay` from (or the file given with `--env-file`). See [.env.example](./.env.example) for every option. The common ones:
 
 ```env
-# Claude CLI path (usually just "claude")
-CLAUDE_CLI_PATH=claude
-
 # Explicit authentication method (optional)
 # Options: cli, api_key, bedrock, vertex
 # If not set, auto-detects based on available credentials
@@ -236,7 +228,6 @@ If you listen on another interface (`--host 0.0.0.0`), set an API key. claude-re
 Built-in rate limiting protects against abuse and ensures fair usage:
 
 - **Chat Completions** (`/v1/chat/completions`, `/v1/messages`, `/v1/responses`): 10 requests/minute
-- **Debug Requests** (`/v1/debug/request`): 2 requests/minute
 - **Auth Status** (`/v1/auth/status`): 10 requests/minute
 - **Health Check** (`/health`): 30 requests/minute
 
@@ -258,7 +249,6 @@ Configure rate limiting through environment variables:
 ```bash
 RATE_LIMIT_ENABLED=true
 RATE_LIMIT_CHAT_PER_MINUTE=10
-RATE_LIMIT_DEBUG_PER_MINUTE=2
 RATE_LIMIT_AUTH_PER_MINUTE=10
 RATE_LIMIT_HEALTH_PER_MINUTE=30
 ```
@@ -353,10 +343,9 @@ The `Dockerfile` in the repo root builds the same non-root image, and the includ
 | `ALLOWED_HOSTS` | Comma-separated `Host` header allow-list; wildcards like `*.example.com` are allowed. Protects against DNS rebinding. Add every name clients use (LAN IP, container name, ...). `*` disables the check. | `localhost,127.0.0.1,::1,[::1],*.localhost` |
 | `FORWARDED_ALLOW_IPS` | Comma-separated proxy IPs whose `X-Forwarded-For` is trusted for the client IP (rate limits, logs). Read by `claude-relay`; plain `uvicorn` trusts `127.0.0.1` by default. | empty (none) |
 | `MAX_SESSIONS` | Most sessions kept in memory at once. Creating one more evicts the least recently used. | `1000` |
-| `ALLOW_TOOLS` | Honour `"enable_tools": true` in requests, and allow `POST /v1/mcp/servers` and `/v1/mcp/connect` (which launch a client-chosen command). Tools run Bash/Write/Edit with permissions bypassed. When off, such requests get a 403. | `false` |
+| `ALLOW_TOOLS` | Honour `"enable_tools": true` in requests. Tools run Bash/Write/Edit with permissions bypassed. When off, such requests get a 403. | `false` |
 | `CLAUDE_AUTH_METHOD` | Auth method: `cli`, `api_key`, `bedrock`, `vertex` | auto-detect |
 | `ANTHROPIC_API_KEY` | Direct Anthropic API key. Optional — also unlocks live `/v1/models` discovery and dynamic latest-Sonnet default. Not required when using Bedrock, Vertex, or Claude CLI subscription auth. | - |
-| `API_KEYS` | Comma-separated client API keys | - |
 | `DEFAULT_MODEL` | Override the default model. When unset and `ANTHROPIC_API_KEY` is configured, the wrapper resolves the latest Sonnet at startup; otherwise it uses the `sonnet` alias, which Claude Code maps to its latest Sonnet. | auto |
 | `MODEL_ALIASES` | Comma-separated `name=model` pairs applied to the request's `model` on both endpoints, for clients that hard-code other names, e.g. `gpt-4o=sonnet,gpt-4o-mini=haiku`. | - |
 | `FALLBACK_MODEL` | Model Claude Code switches to when the requested one is overloaded or unavailable. Ignored when it equals the request's model. Per request: `X-Claude-Fallback-Model` header. | - |
@@ -643,18 +632,13 @@ See `examples/session_continuity.py` for comprehensive Python examples and `exam
 
 ## Troubleshooting
 
-1. **Claude CLI not found**:
-   ```bash
-   # Check Claude is in PATH
-   which claude
-   # Update CLAUDE_CLI_PATH in .env if needed
-   ```
+1. **Claude CLI not found**: claude-relay runs the CLI bundled with `claude-agent-sdk`, or `claude` on `PATH` if the SDK has none. Reinstall claude-relay, or check `which claude`.
 
 2. **Authentication errors**:
    ```bash
-   # Test authentication with fastest model
-   claude --print --model claude-haiku-4-5-20251001 "Hello"
-   # If this fails, re-authenticate if needed
+   # Shows whether the CLI is logged in (no model call); claude-relay runs this at startup
+   claude auth status
+   # If it says "loggedIn": false, run: claude auth login
    ```
 
 3. **Timeout errors**:
@@ -663,50 +647,20 @@ See `examples/session_continuity.py` for comprehensive Python examples and `exam
 
 ## Testing
 
-### 🧪 **Quick Test Suite**
-Test all endpoints with a simple script:
+The test suite runs in-process with the Claude Agent SDK mocked, so it needs no running server and makes no Claude calls:
+
 ```bash
-# Make sure server is running first
-poetry run python tests/test_endpoints.py
+poetry install --with dev
+poetry run pytest tests/
+poetry run black --check claude_relay tests
 ```
 
-### 📝 **Basic Test Suite**
-Run the comprehensive test suite:
+To try a running server by hand, use the scripts in [examples/](./examples/), or:
+
 ```bash
-# Make sure server is running first  
-poetry run python test_basic.py
-
-# With API key protection enabled, set TEST_API_KEY:
-TEST_API_KEY=your-generated-key poetry run python test_basic.py
-```
-
-The test suite automatically detects whether API key protection is enabled and provides helpful guidance for providing the necessary authentication.
-
-### 🔍 **Authentication Test**
-Check authentication status:
-```bash
+curl http://localhost:8000/health
 curl http://localhost:8000/v1/auth/status | python -m json.tool
 ```
-
-### ⚙️ **Development Tools**
-```bash
-# Install development dependencies
-poetry install --with dev
-
-# Format code
-poetry run black .
-
-# Run full tests (when implemented)
-poetry run pytest tests/
-```
-
-### ✅ **Expected Results**
-All tests should show:
-- **4/4 endpoint tests passing**
-- **4/4 basic tests passing** 
-- **Authentication method detected** (claude_cli, anthropic, bedrock, or vertex)
-- **Real cost tracking** (e.g., $0.001-0.005 per test call)
-- **Accurate token counts** from SDK metadata
 
 ## FAQ
 

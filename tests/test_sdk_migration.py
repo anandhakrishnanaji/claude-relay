@@ -109,26 +109,6 @@ class TestMessageHandling:
 
         assert MessageAdapter is not None
 
-    def test_filter_content_basic(self):
-        """Test basic content filtering."""
-        from claude_relay.message_adapter import MessageAdapter
-
-        # Test with simple text
-        result = MessageAdapter.filter_content("Hello world")
-        assert result == "Hello world"
-
-    def test_filter_content_with_images(self):
-        """Test content filtering with image references in output."""
-        from claude_relay.message_adapter import MessageAdapter
-
-        # Test with image reference in Claude's output (string format)
-        content = "Here is the result: [Image: example.jpg] as you can see."
-
-        result = MessageAdapter.filter_content(content)
-        assert isinstance(result, str)
-        # Image reference should be converted to placeholder
-        assert "[Image: Content not supported" in result
-
 
 class TestAPIModels:
     """Test API models and validation."""

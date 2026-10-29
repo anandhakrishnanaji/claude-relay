@@ -242,7 +242,6 @@ async def create_response(
     if request_body.reasoning:
         logger.info(f"reasoning={request_body.reasoning} is accepted but not applied")
 
-    # No filter_content on the input: it would strip XML tags from the user's prompt
     prompt, system_prompt = MessageAdapter.messages_to_prompt(_to_messages(request_body))
     # Apply MODEL_ALIASES and reject clearly non-Claude names, as chat completions does
     model = ParameterValidator.resolve_model(request_body.model)
@@ -279,10 +278,9 @@ async def create_response(
         return main.model_error_response(sdk_error["message"])
     main._raise_for_sdk_error(chunks)  # 401 for a Claude Code login failure, else 429/502
 
-    raw_text = main.claude_cli.parse_claude_message(chunks)
-    if raw_text is None:
+    text = main.claude_cli.parse_claude_message(chunks)
+    if text is None:
         raise HTTPException(status_code=500, detail="No response from Claude Code")
-    text = MessageAdapter.filter_content(raw_text)
     return _finished(request_body, resp_id, msg_id, created, chunks, prompt, text)
 
 
@@ -319,8 +317,8 @@ async def _stream(
             # The CLI's own error text (login, model, rate limit...); reported as response.failed
             if chunk.get("error"):
                 continue
-            text = MessageAdapter.filter_content(claude_cli.parse_claude_message([chunk]) or "")
-            if text and not text.isspace():
+            text = claude_cli.parse_claude_message([chunk])
+            if text:
                 deltas.append(text)
                 yield event("response.output_text.delta", **part_ids, delta=text, logprobs=[])
         from claude_relay import main

@@ -2,26 +2,6 @@
 Constants and configuration for Claude Code OpenAI Wrapper.
 
 Single source of truth for tool names, models, and other configuration values.
-
-Usage Examples:
-    # Check if a model is supported
-    from claude_relay.constants import CLAUDE_MODELS
-    if model_name in CLAUDE_MODELS:
-        # proceed with request
-
-    # Get default allowed tools
-    from claude_relay.constants import DEFAULT_ALLOWED_TOOLS
-    options = {"allowed_tools": DEFAULT_ALLOWED_TOOLS}
-
-    # Use rate limits in FastAPI
-    from claude_relay.constants import RATE_LIMIT_CHAT
-    @limiter.limit(f"{RATE_LIMIT_CHAT}/minute")
-    async def chat_endpoint(): ...
-
-Note:
-    - Tool configurations are managed by ToolManager (see tool_manager.py)
-    - Model validation rejects only names that are clearly not Claude models
-    - Rate limits can be overridden via environment variables
 """
 
 import json
@@ -64,13 +44,6 @@ DEFAULT_ALLOWED_TOOLS = [
     "Bash",
     "Write",
     "Edit",
-]
-
-# Tools to disallow by default (potentially dangerous or slow)
-DEFAULT_DISALLOWED_TOOLS = [
-    "Task",  # Can spawn sub-agents
-    "WebFetch",  # External network access
-    "WebSearch",  # External network access
 ]
 
 # Claude Models
@@ -129,7 +102,6 @@ CLAUDE_MODELS = (
 # that resolution succeeds; it is the alias the CLI maps to its latest Sonnet.
 DEFAULT_MODEL_ENV: Optional[str] = os.getenv("DEFAULT_MODEL")
 DEFAULT_MODEL_FALLBACK = "sonnet"
-DEFAULT_MODEL = DEFAULT_MODEL_ENV or DEFAULT_MODEL_FALLBACK
 RESOLVED_DEFAULT_MODEL: Optional[str] = None
 
 
@@ -193,25 +165,3 @@ ALLOWED_HOSTS = parse_allowed_hosts(os.getenv("ALLOWED_HOSTS"))
 # Honour "enable_tools": true in requests. Off by default: tools run Bash, Write
 # and Edit with permissions bypassed, so a request is enough to run code here.
 ALLOW_TOOLS = os.getenv("ALLOW_TOOLS", "false").lower() in ("true", "1", "yes", "on")
-
-# System Prompt Types
-SYSTEM_PROMPT_TYPE_TEXT = "text"
-SYSTEM_PROMPT_TYPE_PRESET = "preset"
-
-# System Prompt Presets
-SYSTEM_PROMPT_PRESET_CLAUDE_CODE = "claude_code"
-
-# API Configuration
-DEFAULT_MAX_TURNS = 10
-DEFAULT_TIMEOUT_MS = 600000  # 10 minutes
-DEFAULT_PORT = 8000
-
-# Session Management
-SESSION_CLEANUP_INTERVAL_MINUTES = 5
-SESSION_MAX_AGE_MINUTES = 60
-
-# Rate Limiting (requests per minute)
-RATE_LIMIT_DEFAULT = 60
-RATE_LIMIT_CHAT = 30
-RATE_LIMIT_MODELS = 100
-RATE_LIMIT_HEALTH = 200

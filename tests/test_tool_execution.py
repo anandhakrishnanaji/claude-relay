@@ -56,7 +56,6 @@ class TestDefaultAllowedTools:
         from claude_relay.constants import DEFAULT_ALLOWED_TOOLS
 
         # These tools should NOT be in the default allowed set
-        # (they're in DEFAULT_DISALLOWED_TOOLS)
         dangerous_tools = ["Task", "WebFetch", "WebSearch"]
         for tool in dangerous_tools:
             assert (

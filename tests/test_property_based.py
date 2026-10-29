@@ -5,8 +5,7 @@ Property-based tests using Hypothesis for edge case discovery.
 These tests generate random inputs to find edge cases that manual testing might miss.
 """
 
-import pytest
-from hypothesis import given, strategies as st, settings, assume
+from hypothesis import given, strategies as st, settings
 
 from claude_relay.message_adapter import MessageAdapter
 from claude_relay.parameter_validator import ParameterValidator
@@ -15,16 +14,6 @@ from claude_relay.constants import CLAUDE_MODELS
 
 class TestMessageAdapterProperties:
     """Property-based tests for MessageAdapter."""
-
-    @given(content=st.text(min_size=1, max_size=1000))
-    @settings(max_examples=50)
-    def test_filter_content_handles_any_text(self, content: str):
-        """filter_content should handle any text without crashing."""
-        assume("\x00" not in content)  # Null bytes
-
-        # Should not crash
-        result = MessageAdapter.filter_content(content)
-        assert isinstance(result, str)
 
     @given(text=st.text(min_size=0, max_size=10000))
     @settings(max_examples=30)
@@ -50,23 +39,6 @@ class TestParameterValidatorProperties:
     def test_any_claude_model_name_accepted(self, model: str):
         """Any name containing "claude" is accepted, so new models keep working."""
         assert ParameterValidator.validate_model(f"claude-{model}") is True
-
-    @given(permission_mode=st.sampled_from(["default", "acceptEdits", "bypassPermissions", "plan"]))
-    @settings(max_examples=10)
-    def test_valid_permission_modes_accepted(self, permission_mode: str):
-        """Valid permission modes should be accepted."""
-        result = ParameterValidator.validate_permission_mode(permission_mode)
-        assert result is True
-
-    @given(permission_mode=st.text(min_size=1, max_size=30))
-    @settings(max_examples=20)
-    def test_invalid_permission_modes_rejected(self, permission_mode: str):
-        """Invalid permission modes should be rejected."""
-        valid_modes = {"default", "acceptEdits", "bypassPermissions", "plan"}
-        assume(permission_mode not in valid_modes)
-
-        result = ParameterValidator.validate_permission_mode(permission_mode)
-        assert result is False
 
 
 class TestTokenEstimation:

@@ -15,7 +15,6 @@ from starlette.middleware.trustedhost import TrustedHostMiddleware
 from starlette.responses import PlainTextResponse
 from fastapi.responses import StreamingResponse, JSONResponse, HTMLResponse
 from fastapi.exceptions import RequestValidationError
-from pydantic import ValidationError
 import httpx
 from dotenv import load_dotenv
 
@@ -28,14 +27,6 @@ from claude_relay.models import (
     Usage,
     StreamChoice,
     SessionListResponse,
-    ToolListResponse,
-    ToolMetadataResponse,
-    ToolConfigurationResponse,
-    ToolConfigurationRequest,
-    MCPServerConfigRequest,
-    MCPServerInfoResponse,
-    MCPServersListResponse,
-    MCPConnectionRequest,
     # Anthropic API compatible models
     AnthropicMessagesRequest,
     AnthropicMessagesResponse,
@@ -52,11 +43,9 @@ from claude_relay.auth import (
     get_claude_code_auth_info,
     record_auth_failure,
 )
-from claude_relay.parameter_validator import ParameterValidator, CompatibilityReporter
+from claude_relay.parameter_validator import ParameterValidator
 from claude_relay.responses_api import router as responses_router
 from claude_relay.session_manager import session_manager
-from claude_relay.tool_manager import tool_manager
-from claude_relay.mcp_client import mcp_client, MCPServerConfig
 from claude_relay.rate_limiter import (
     limiter,
     rate_limit_exceeded_handler,
@@ -319,7 +308,6 @@ async def lifespan(app: FastAPI):
         logger.debug("🔧 Available endpoints:")
         logger.debug("   POST /v1/chat/completions - Main chat endpoint")
         logger.debug("   GET  /v1/models - List available models")
-        logger.debug("   POST /v1/debug/request - Debug request validation")
         logger.debug("   GET  /v1/auth/status - Authentication status")
         logger.debug("   GET  /health - Health check")
         logger.debug(f"🔧 API Key protection: {'Enabled' if os.getenv('API_KEY') else 'Disabled'}")
@@ -732,10 +720,6 @@ async def generate_streaming_response(
             # Disable all tools by using CLAUDE_TOOLS constant
             claude_options["disallowed_tools"] = CLAUDE_TOOLS
             claude_options["max_turns"] = 1  # Single turn for Q&A
-            # Drop X-Claude-Allowed-Tools / X-Claude-Permission-Mode so headers
-            # can't re-enable tools that enable_tools/ALLOW_TOOLS left off
-            claude_options.pop("allowed_tools", None)
-            claude_options.pop("permission_mode", None)
             logger.info("Tools disabled (default behavior for OpenAI compatibility)")
         else:
             # Enable tools - use default safe subset (Read, Glob, Grep, Bash, Write, Edit)
@@ -814,10 +798,7 @@ async def generate_streaming_response(
                         else:
                             continue
 
-                        # Filter out tool usage and thinking blocks
-                        filtered_text = MessageAdapter.filter_content(raw_text)
-
-                        if filtered_text and not filtered_text.isspace():
+                        if raw_text:
                             # Create streaming chunk
                             stream_chunk = ChatCompletionStreamResponse(
                                 id=request_id,
@@ -825,7 +806,7 @@ async def generate_streaming_response(
                                 choices=[
                                     StreamChoice(
                                         index=0,
-                                        delta={"content": filtered_text},
+                                        delta={"content": raw_text},
                                         finish_reason=None,
                                     )
                                 ],
@@ -834,17 +815,14 @@ async def generate_streaming_response(
                             yield f"data: {stream_chunk.model_dump_json()}\n\n"
 
                 elif isinstance(content, str):
-                    # Filter out tool usage and thinking blocks
-                    filtered_content = MessageAdapter.filter_content(content)
-
-                    if filtered_content and not filtered_content.isspace():
+                    if content:
                         # Create streaming chunk
                         stream_chunk = ChatCompletionStreamResponse(
                             id=request_id,
                             model=response_model,
                             choices=[
                                 StreamChoice(
-                                    index=0, delta={"content": filtered_content}, finish_reason=None
+                                    index=0, delta={"content": content}, finish_reason=None
                                 )
                             ],
                         )
@@ -890,11 +868,11 @@ async def generate_streaming_response(
         usage_data = None
         if request.stream_options and request.stream_options.include_usage:
             # Real usage from the SDK result message; estimate only if it has none
-            completion_text = assistant_content or ""
-            estimate = claude_cli.estimate_token_usage(prompt, completion_text, request.model)
             usage_data = Usage(
                 **sdk_usage.openai_usage_counts(
-                    chunks_buffer, estimate["prompt_tokens"], estimate["completion_tokens"]
+                    chunks_buffer,
+                    MessageAdapter.estimate_tokens(prompt),
+                    MessageAdapter.estimate_tokens(assistant_content),
                 )
             )
             logger.debug(f"Usage: {usage_data}")
@@ -1002,11 +980,6 @@ async def chat_completions(
             return model_error_response(unknown_model_message(request_body.model))
         claude_headers["model"] = model
 
-        # Log compatibility info
-        if logger.isEnabledFor(logging.DEBUG):
-            compatibility_report = CompatibilityReporter.generate_compatibility_report(request_body)
-            logger.debug(f"Compatibility report: {compatibility_report}")
-
         if request_body.stream:
             # Return streaming response
             stream = generate_streaming_response(request_body, request_id, claude_headers)
@@ -1064,10 +1037,6 @@ async def chat_completions(
                 # Disable all tools by using CLAUDE_TOOLS constant
                 claude_options["disallowed_tools"] = CLAUDE_TOOLS
                 claude_options["max_turns"] = 1  # Single turn for Q&A
-                # Drop X-Claude-Allowed-Tools / X-Claude-Permission-Mode so headers
-                # can't re-enable tools that enable_tools/ALLOW_TOOLS left off
-                claude_options.pop("allowed_tools", None)
-                claude_options.pop("permission_mode", None)
                 logger.info("Tools disabled (default behavior for OpenAI compatibility)")
             else:
                 # Enable tools - use default safe subset (Read, Glob, Grep, Bash, Write, Edit)
@@ -1101,13 +1070,10 @@ async def chat_completions(
             _raise_for_sdk_error(chunks)
 
             # Extract assistant message
-            raw_assistant_content = claude_cli.parse_claude_message(chunks)
+            assistant_content = claude_cli.parse_claude_message(chunks)
 
-            if not raw_assistant_content:
+            if not assistant_content:
                 raise HTTPException(status_code=500, detail="No response from Claude Code")
-
-            # Filter out tool usage and thinking blocks
-            assistant_content = MessageAdapter.filter_content(raw_assistant_content)
 
             # Add assistant response to session if using session mode
             if actual_session_id:
@@ -1236,13 +1202,10 @@ async def anthropic_messages(
         _raise_for_sdk_error(chunks)
 
         # Extract assistant message
-        raw_assistant_content = claude_cli.parse_claude_message(chunks)
+        assistant_content = claude_cli.parse_claude_message(chunks)
 
-        if not raw_assistant_content:
+        if not assistant_content:
             raise HTTPException(status_code=500, detail="No response from Claude Code")
-
-        # Filter out tool usage and thinking blocks
-        assistant_content = MessageAdapter.filter_content(raw_assistant_content)
 
         # Real usage from the SDK result message; estimate only if it has none
         real_usage = sdk_usage.extract_usage(chunks)
@@ -1289,36 +1252,6 @@ async def list_models(
             for alias in CLAUDE_MODEL_ALIASES
         ]
     return {"object": "list", "data": models}
-
-
-@app.post("/v1/compatibility")
-async def check_compatibility(request_body: ChatCompletionRequest):
-    """Check OpenAI API compatibility for a request."""
-    report = CompatibilityReporter.generate_compatibility_report(request_body)
-    return {
-        "compatibility_report": report,
-        "claude_agent_sdk_options": {
-            "supported": [
-                "model",
-                "system_prompt",
-                "max_turns",
-                "allowed_tools",
-                "disallowed_tools",
-                "permission_mode",
-                "max_thinking_tokens",
-                "continue_conversation",
-                "resume",
-                "cwd",
-            ],
-            "custom_headers": [
-                "X-Claude-Max-Turns",
-                "X-Claude-Allowed-Tools",
-                "X-Claude-Disallowed-Tools",
-                "X-Claude-Permission-Mode",
-                "X-Claude-Max-Thinking-Tokens",
-            ],
-        },
-    }
 
 
 @app.get("/health")
@@ -1944,77 +1877,6 @@ async def root():
     return HTMLResponse(content=html_content)
 
 
-@app.post("/v1/debug/request")
-@rate_limit_endpoint("debug")
-async def debug_request_validation(
-    request: Request, credentials: Optional[HTTPAuthorizationCredentials] = Depends(security)
-):
-    """Debug endpoint to test request validation and see what's being sent."""
-    await verify_api_key(request, credentials)
-    try:
-        # Get the raw request body
-        body = await request.body()
-        raw_body = body.decode() if body else ""
-
-        # Try to parse as JSON
-        parsed_body = None
-        json_error = None
-        try:
-            import json as json_lib
-
-            parsed_body = json_lib.loads(raw_body) if raw_body else {}
-        except Exception as e:
-            json_error = str(e)
-
-        # Try to validate against our model
-        validation_result = {"valid": False, "errors": []}
-        if parsed_body:
-            try:
-                chat_request = ChatCompletionRequest(**parsed_body)
-                validation_result = {"valid": True, "validated_data": chat_request.model_dump()}
-            except ValidationError as e:
-                validation_result = {
-                    "valid": False,
-                    "errors": [
-                        {
-                            "field": " -> ".join(str(loc) for loc in error.get("loc", [])),
-                            "message": error.get("msg", "Unknown error"),
-                            "type": error.get("type", "validation_error"),
-                            "input": error.get("input"),
-                        }
-                        for error in e.errors()
-                    ],
-                }
-
-        return {
-            "debug_info": {
-                "headers": redact_headers(request.headers),
-                "method": request.method,
-                "url": str(request.url),
-                "raw_body": raw_body,
-                "json_parse_error": json_error,
-                "parsed_body": parsed_body,
-                "validation_result": validation_result,
-                "debug_mode_enabled": DEBUG_MODE or VERBOSE,
-                "example_valid_request": {
-                    "model": "claude-3-sonnet-20240229",
-                    "messages": [{"role": "user", "content": "Hello, world!"}],
-                    "stream": False,
-                },
-            }
-        }
-
-    except Exception as e:
-        return {
-            "debug_info": {
-                "error": f"Debug endpoint error: {str(e)}",
-                "headers": redact_headers(request.headers),
-                "method": request.method,
-                "url": str(request.url),
-            }
-        }
-
-
 @app.get("/v1/auth/status")
 @rate_limit_endpoint("auth")
 async def get_auth_status(
@@ -2091,259 +1953,6 @@ async def delete_session(
         raise HTTPException(status_code=404, detail="Session not found")
 
     return {"message": f"Session {session_id} deleted successfully"}
-
-
-# Tool Management Endpoints
-
-
-@app.get("/v1/tools", response_model=ToolListResponse)
-@rate_limit_endpoint("general")
-async def list_tools(
-    request: Request, credentials: Optional[HTTPAuthorizationCredentials] = Depends(security)
-):
-    """List all available Claude Code tools with metadata."""
-    await verify_api_key(request, credentials)
-
-    tools = tool_manager.list_all_tools()
-    tool_responses = [
-        ToolMetadataResponse(
-            name=tool.name,
-            description=tool.description,
-            category=tool.category,
-            parameters=tool.parameters,
-            examples=tool.examples,
-            is_safe=tool.is_safe,
-            requires_network=tool.requires_network,
-        )
-        for tool in tools
-    ]
-
-    return ToolListResponse(tools=tool_responses, total=len(tool_responses))
-
-
-@app.get("/v1/tools/config", response_model=ToolConfigurationResponse)
-@rate_limit_endpoint("general")
-async def get_tool_config(
-    request: Request,
-    session_id: Optional[str] = None,
-    credentials: Optional[HTTPAuthorizationCredentials] = Depends(security),
-):
-    """Get tool configuration (global or per-session)."""
-    await verify_api_key(request, credentials)
-
-    config = tool_manager.get_effective_config(session_id)
-    effective_tools = tool_manager.get_effective_tools(session_id)
-
-    return ToolConfigurationResponse(
-        allowed_tools=config.allowed_tools,
-        disallowed_tools=config.disallowed_tools,
-        effective_tools=effective_tools,
-        created_at=config.created_at,
-        updated_at=config.updated_at,
-    )
-
-
-@app.post("/v1/tools/config", response_model=ToolConfigurationResponse)
-@rate_limit_endpoint("general")
-async def update_tool_config(
-    config_request: ToolConfigurationRequest,
-    request: Request,
-    credentials: Optional[HTTPAuthorizationCredentials] = Depends(security),
-):
-    """Update tool configuration (global or per-session)."""
-    await verify_api_key(request, credentials)
-
-    # Validate tool names if provided
-    all_tool_names = []
-    if config_request.allowed_tools:
-        all_tool_names.extend(config_request.allowed_tools)
-    if config_request.disallowed_tools:
-        all_tool_names.extend(config_request.disallowed_tools)
-
-    if all_tool_names:
-        validation = tool_manager.validate_tools(all_tool_names)
-        invalid_tools = [name for name, valid in validation.items() if not valid]
-        if invalid_tools:
-            raise HTTPException(
-                status_code=400,
-                detail=f"Invalid tool names: {', '.join(invalid_tools)}. Valid tools: {', '.join(CLAUDE_TOOLS)}",
-            )
-
-    # Update configuration
-    if config_request.session_id:
-        config = tool_manager.set_session_config(
-            config_request.session_id, config_request.allowed_tools, config_request.disallowed_tools
-        )
-    else:
-        config = tool_manager.update_global_config(
-            config_request.allowed_tools, config_request.disallowed_tools
-        )
-
-    effective_tools = tool_manager.get_effective_tools(config_request.session_id)
-
-    return ToolConfigurationResponse(
-        allowed_tools=config.allowed_tools,
-        disallowed_tools=config.disallowed_tools,
-        effective_tools=effective_tools,
-        created_at=config.created_at,
-        updated_at=config.updated_at,
-    )
-
-
-@app.get("/v1/tools/stats")
-@rate_limit_endpoint("general")
-async def get_tool_stats(
-    request: Request, credentials: Optional[HTTPAuthorizationCredentials] = Depends(security)
-):
-    """Get statistics about tool configuration and usage."""
-    await verify_api_key(request, credentials)
-    return tool_manager.get_stats()
-
-
-# MCP (Model Context Protocol) Management Endpoints
-
-
-def require_mcp_allowed():
-    """Registering/connecting an MCP server spawns a client-chosen command, so gate it like tools."""
-    if not constants.ALLOW_TOOLS:
-        raise HTTPException(
-            status_code=403,
-            detail="MCP server registration is disabled on this server. Set ALLOW_TOOLS=true "
-            "on the server to let clients register and launch MCP server commands.",
-        )
-
-
-@app.get("/v1/mcp/servers", response_model=MCPServersListResponse)
-@rate_limit_endpoint("general")
-async def list_mcp_servers(
-    request: Request, credentials: Optional[HTTPAuthorizationCredentials] = Depends(security)
-):
-    """List all registered MCP servers."""
-    await verify_api_key(request, credentials)
-
-    if not mcp_client.is_available():
-        raise HTTPException(
-            status_code=503, detail="MCP SDK not available. Install with: pip install mcp"
-        )
-
-    servers = mcp_client.list_servers()
-    connections = mcp_client.list_connected_servers()
-
-    server_responses = []
-    for server in servers:
-        connection = mcp_client.get_connection(server.name)
-        server_responses.append(
-            MCPServerInfoResponse(
-                name=server.name,
-                command=server.command,
-                args=server.args,
-                description=server.description,
-                enabled=server.enabled,
-                connected=server.name in connections,
-                tools_count=len(connection.available_tools) if connection else 0,
-                resources_count=len(connection.available_resources) if connection else 0,
-                prompts_count=len(connection.available_prompts) if connection else 0,
-            )
-        )
-
-    return MCPServersListResponse(servers=server_responses, total=len(server_responses))
-
-
-@app.post("/v1/mcp/servers")
-@rate_limit_endpoint("general")
-async def register_mcp_server(
-    body: MCPServerConfigRequest,
-    request: Request,
-    credentials: Optional[HTTPAuthorizationCredentials] = Depends(security),
-):
-    """Register a new MCP server."""
-    await verify_api_key(request, credentials)
-    require_mcp_allowed()
-
-    if not mcp_client.is_available():
-        raise HTTPException(
-            status_code=503, detail="MCP SDK not available. Install with: pip install mcp"
-        )
-
-    config = MCPServerConfig(
-        name=body.name,
-        command=body.command,
-        args=body.args,
-        env=body.env,
-        description=body.description,
-        enabled=body.enabled,
-    )
-
-    mcp_client.register_server(config)
-
-    return {"message": f"MCP server '{body.name}' registered successfully"}
-
-
-@app.post("/v1/mcp/connect")
-@rate_limit_endpoint("general")
-async def connect_mcp_server(
-    body: MCPConnectionRequest,
-    request: Request,
-    credentials: Optional[HTTPAuthorizationCredentials] = Depends(security),
-):
-    """Connect to a registered MCP server."""
-    await verify_api_key(request, credentials)
-    require_mcp_allowed()
-
-    if not mcp_client.is_available():
-        raise HTTPException(
-            status_code=503, detail="MCP SDK not available. Install with: pip install mcp"
-        )
-
-    success = await mcp_client.connect_server(body.server_name)
-
-    if not success:
-        raise HTTPException(
-            status_code=500, detail=f"Failed to connect to MCP server '{body.server_name}'"
-        )
-
-    connection = mcp_client.get_connection(body.server_name)
-    return {
-        "message": f"Connected to MCP server '{body.server_name}'",
-        "tools": len(connection.available_tools) if connection else 0,
-        "resources": len(connection.available_resources) if connection else 0,
-        "prompts": len(connection.available_prompts) if connection else 0,
-    }
-
-
-@app.post("/v1/mcp/disconnect")
-@rate_limit_endpoint("general")
-async def disconnect_mcp_server(
-    body: MCPConnectionRequest,
-    request: Request,
-    credentials: Optional[HTTPAuthorizationCredentials] = Depends(security),
-):
-    """Disconnect from an MCP server."""
-    await verify_api_key(request, credentials)
-
-    if not mcp_client.is_available():
-        raise HTTPException(
-            status_code=503, detail="MCP SDK not available. Install with: pip install mcp"
-        )
-
-    success = await mcp_client.disconnect_server(body.server_name)
-
-    if not success:
-        raise HTTPException(
-            status_code=404, detail=f"Not connected to MCP server '{body.server_name}'"
-        )
-
-    return {"message": f"Disconnected from MCP server '{body.server_name}'"}
-
-
-@app.get("/v1/mcp/stats")
-@rate_limit_endpoint("general")
-async def get_mcp_stats(
-    request: Request, credentials: Optional[HTTPAuthorizationCredentials] = Depends(security)
-):
-    """Get statistics about MCP connections."""
-    await verify_api_key(request, credentials)
-    return mcp_client.get_stats()
 
 
 @app.exception_handler(HTTPException)

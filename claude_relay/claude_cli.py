@@ -328,67 +328,6 @@ class ClaudeCodeCLI:
 
         return last_text
 
-    def extract_metadata(self, messages: List[Dict[str, Any]]) -> Dict[str, Any]:
-        """Extract metadata like costs, tokens, and session info from SDK messages."""
-        metadata = {
-            "session_id": None,
-            "total_cost_usd": 0.0,
-            "duration_ms": 0,
-            "num_turns": 0,
-            "model": None,
-        }
-
-        for message in messages:
-            # New SDK format - ResultMessage
-            if message.get("subtype") == "success" and "total_cost_usd" in message:
-                metadata.update(
-                    {
-                        "total_cost_usd": message.get("total_cost_usd", 0.0),
-                        "duration_ms": message.get("duration_ms", 0),
-                        "num_turns": message.get("num_turns", 0),
-                        "session_id": message.get("session_id"),
-                    }
-                )
-            # New SDK format - SystemMessage
-            elif message.get("subtype") == "init" and "data" in message:
-                data = message["data"]
-                metadata.update({"session_id": data.get("session_id"), "model": data.get("model")})
-            # Old format fallback
-            elif message.get("type") == "result":
-                metadata.update(
-                    {
-                        "total_cost_usd": message.get("total_cost_usd", 0.0),
-                        "duration_ms": message.get("duration_ms", 0),
-                        "num_turns": message.get("num_turns", 0),
-                        "session_id": message.get("session_id"),
-                    }
-                )
-            elif message.get("type") == "system" and message.get("subtype") == "init":
-                metadata.update(
-                    {"session_id": message.get("session_id"), "model": message.get("model")}
-                )
-
-        return metadata
-
-    def estimate_token_usage(
-        self, prompt: str, completion: str, model: Optional[str] = None
-    ) -> Dict[str, int]:
-        """
-        Estimate token usage based on character count.
-
-        Uses rough approximation: ~4 characters per token for English text.
-        This is approximate and may not match actual tokenization.
-        """
-        # Rough approximation: 1 token ≈ 4 characters
-        prompt_tokens = max(1, len(prompt) // 4)
-        completion_tokens = max(1, len(completion) // 4)
-
-        return {
-            "prompt_tokens": prompt_tokens,
-            "completion_tokens": completion_tokens,
-            "total_tokens": prompt_tokens + completion_tokens,
-        }
-
     def _cleanup_temp_dir(self):
         """Clean up temporary directory on exit."""
         if self.temp_dir and os.path.exists(self.temp_dir):
