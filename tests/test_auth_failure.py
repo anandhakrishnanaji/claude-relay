@@ -15,6 +15,7 @@ import pytest
 from fastapi.testclient import TestClient
 
 import claude_relay.auth as auth
+import claude_relay.errors as errors
 import claude_relay.main as main
 from claude_relay import usage as sdk_usage
 from claude_relay.claude_cli import ClaudeCodeCLI
@@ -121,7 +122,7 @@ class TestEndpoints:
         response = chat(NOT_LOGGED_IN, stream=True)
         assert response.status_code == 200
         events = stream_events(response)
-        assert events == [main.openai_error(claude_login_error("not_logged_in"))]
+        assert events == [errors.openai_error(claude_login_error("not_logged_in"))]
         assert CLI_TEXT not in response.text
 
     def test_last_failure_recorded_then_cleared(self):

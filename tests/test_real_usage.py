@@ -13,6 +13,7 @@ import pytest
 from fastapi.testclient import TestClient
 
 import claude_relay.completion as completion
+import claude_relay.errors as errors
 import claude_relay.main as main
 from claude_relay import usage as sdk_usage
 
@@ -159,7 +160,7 @@ class TestChatStreamingErrors:
         assert "[DONE]" not in response.text
         assert "unable to provide" not in response.text
         events = stream_events(response)
-        assert events[-1] == main._openai_error(status, sdk_usage.result_error(chunks)["message"])
+        assert events[-1] == errors._openai_error(status, sdk_usage.result_error(chunks)["message"])
         # The CLI's error text is not streamed as if it were the answer
         assert all(e["choices"][0]["delta"].get("content") == "" for e in events[:-1])
         assert all(e["choices"][0]["finish_reason"] is None for e in events[:-1])

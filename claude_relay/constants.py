@@ -11,7 +11,7 @@ from typing import Dict, List, Optional
 from dotenv import load_dotenv
 
 # Load .env before reading any env-derived constant below; this module is
-# imported before main.py gets to its own load_dotenv().
+# imported before app.py gets to its own load_dotenv().
 load_dotenv()
 
 # Claude Agent SDK Tool Names
@@ -165,3 +165,10 @@ ALLOWED_HOSTS = parse_allowed_hosts(os.getenv("ALLOWED_HOSTS"))
 # Honour "enable_tools": true in requests. Off by default: tools run Bash, Write
 # and Edit with permissions bypassed, so a request is enough to run code here.
 ALLOW_TOOLS = os.getenv("ALLOW_TOOLS", "false").lower() in ("true", "1", "yes", "on")
+
+# Debug logging of requests and responses, and extra detail in 422 bodies.
+DEBUG_MODE = os.getenv("DEBUG_MODE", "false").lower() in ("true", "1", "yes", "on")
+VERBOSE = os.getenv("VERBOSE", "false").lower() in ("true", "1", "yes", "on")
+
+# Largest accepted request body, in bytes.
+MAX_REQUEST_SIZE = int(os.getenv("MAX_REQUEST_SIZE", str(10 * 1024 * 1024)))  # 10MB default
