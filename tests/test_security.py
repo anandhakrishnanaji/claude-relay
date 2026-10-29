@@ -16,6 +16,7 @@ from fastapi.testclient import TestClient
 import claude_relay.completion as completion
 import claude_relay.main as main
 import claude_relay.middleware as middleware
+from claude_relay.session_manager import session_manager
 from claude_relay import constants
 from claude_relay.constants import (
     CLAUDE_TOOLS,
@@ -259,7 +260,7 @@ class TestSessionEndpointsAuth:
     def test_requires_api_key(self, method, path):
         import claude_relay.auth as auth
 
-        main.session_manager.get_or_create_session("abc")
+        session_manager.get_or_create_session("abc")
         try:
             with patch.object(auth.auth_manager, "env_api_key", "secret-key"):
                 client = TestClient(main.app, base_url="http://localhost")
@@ -267,7 +268,7 @@ class TestSessionEndpointsAuth:
                 ok = getattr(client, method)(path, headers={"Authorization": "Bearer secret-key"})
                 assert ok.status_code == 200
         finally:
-            main.session_manager.delete_session("abc")
+            session_manager.delete_session("abc")
 
 
 class TestDiagnosticEndpoints:
