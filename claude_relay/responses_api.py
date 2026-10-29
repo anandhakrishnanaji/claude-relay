@@ -3,10 +3,6 @@
 Shapes follow openai.types.responses. The server is stateless: nothing is
 stored, so previous_response_id/conversation are rejected rather than
 silently answered without their context. Function tools are rejected too.
-
-claude_cli and validate_claude_code_auth are looked up on claude_relay.main at
-request time: main includes this router, so importing main here at module
-level would be circular (and tests patch them on main).
 """
 
 import itertools
@@ -16,17 +12,14 @@ import os
 import time
 from typing import Any, AsyncGenerator, Dict, List, Literal, Optional, Union
 
-from fastapi import APIRouter, Depends, HTTPException, Request
+from fastapi import APIRouter, Depends, Request
 from fastapi.responses import JSONResponse, StreamingResponse
 from fastapi.security import HTTPAuthorizationCredentials
 from pydantic import BaseModel, Field
 
-from claude_relay import usage as sdk_usage
 from claude_relay.auth import security, verify_api_key
-from claude_relay.constants import CLAUDE_TOOLS
-from claude_relay.message_adapter import MessageAdapter
+from claude_relay.completion import Completion, CompletionError, Run, prepare
 from claude_relay.models import ContentPart, Message, get_default_model
-from claude_relay.parameter_validator import ParameterValidator
 from claude_relay.rate_limiter import rate_limit_endpoint
 
 logger = logging.getLogger(__name__)
@@ -157,11 +150,9 @@ def _to_messages(body: ResponsesRequest) -> List[Message]:
     return messages
 
 
-def _usage(chunks: List[Dict[str, Any]], prompt: str, text: str) -> ResponseUsage:
-    counts = sdk_usage.openai_usage_counts(
-        chunks, MessageAdapter.estimate_tokens(prompt), MessageAdapter.estimate_tokens(text)
-    )
-    real = sdk_usage.extract_usage(chunks) or {}
+def _usage(completion: Completion) -> ResponseUsage:
+    counts = completion.openai_usage()
+    real = completion.usage or {}
     return ResponseUsage(
         input_tokens=counts["prompt_tokens"],
         input_tokens_details={
@@ -174,9 +165,9 @@ def _usage(chunks: List[Dict[str, Any]], prompt: str, text: str) -> ResponseUsag
     )
 
 
-def _finished(body, resp_id, msg_id, created, chunks, prompt, text) -> ResponseObject:
+def _finished(body, resp_id, msg_id, created, completion: Completion, text: str) -> ResponseObject:
     """The final response object for a run that produced no error result."""
-    reason = _INCOMPLETE_REASONS.get(sdk_usage.extract_stop_reason(chunks))
+    reason = _INCOMPLETE_REASONS.get(completion.stop_reason)
     status = "incomplete" if reason else "completed"
     return _response(
         body,
@@ -188,8 +179,8 @@ def _finished(body, resp_id, msg_id, created, chunks, prompt, text) -> ResponseO
         ],
         output_text=text,
         incomplete_details={"reason": reason} if reason else None,
-        usage=_usage(chunks, prompt, text),
-        model=sdk_usage.extract_model(chunks, body.model),
+        usage=_usage(completion),
+        model=completion.model,
     )
 
 
@@ -219,73 +210,41 @@ async def create_response(
     credentials: Optional[HTTPAuthorizationCredentials] = Depends(security),
 ):
     """OpenAI Responses API compatible endpoint (text only, stateless)."""
-    from claude_relay import main
-
     await verify_api_key(request, credentials)
 
     rejection = _unsupported(request_body)
     if rejection:
         return rejection
 
-    auth_valid, auth_info = main.validate_claude_code_auth()
-    if not auth_valid:
-        error_detail = {
-            "message": "Claude Code authentication failed",
-            "errors": auth_info.get("errors", []),
-            "method": auth_info.get("method", "none"),
-            "help": "Check /v1/auth/status for detailed authentication information",
-        }
-        raise HTTPException(status_code=503, detail=error_detail)
-
     if request_body.max_output_tokens is not None:
         logger.info("max_output_tokens is not enforced by Claude Code; ignoring it")
     if request_body.reasoning:
         logger.info(f"reasoning={request_body.reasoning} is accepted but not applied")
 
-    prompt, system_prompt = MessageAdapter.messages_to_prompt(_to_messages(request_body))
-    # Apply MODEL_ALIASES and reject clearly non-Claude names, as chat completions does
-    model = ParameterValidator.resolve_model(request_body.model)
-    if model is None:
-        return main.model_error_response(main.unknown_model_message(request_body.model))
-    completion_args = dict(
-        prompt=prompt,
-        system_prompt=system_prompt,
-        model=model,
-        max_turns=1,
-        disallowed_tools=CLAUDE_TOOLS,
-    )
+    run = prepare(model=request_body.model, messages=_to_messages(request_body))
     resp_id = f"resp_{os.urandom(12).hex()}"
     msg_id = f"msg_{os.urandom(12).hex()}"
     created = int(time.time())
 
     if request_body.stream:
         return StreamingResponse(
-            _stream(main.claude_cli, request_body, completion_args, resp_id, msg_id, created),
+            _stream(run, request_body, resp_id, msg_id, created),
             media_type="text/event-stream",
             headers={"Cache-Control": "no-cache", "Connection": "keep-alive"},
         )
 
-    try:
-        chunks = [
-            chunk async for chunk in main.claude_cli.run_completion(**completion_args, stream=False)
-        ]
-    except Exception as e:
-        logger.error(f"Responses API error: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
+    completion = await run.complete()
+    return _finished(request_body, resp_id, msg_id, created, completion, completion.text)
 
-    sdk_error = sdk_usage.result_error(chunks)
-    if sdk_error and sdk_error.get("code") == "model_not_found":
-        return main.model_error_response(sdk_error["message"])
-    main._raise_for_sdk_error(chunks)  # 401 for a Claude Code login failure, else 429/502
 
-    text = main.claude_cli.parse_claude_message(chunks)
-    if text is None:
-        raise HTTPException(status_code=500, detail="No response from Claude Code")
-    return _finished(request_body, resp_id, msg_id, created, chunks, prompt, text)
+def _failure_code(error: CompletionError) -> str:
+    if error.kind in ("claude_cli_not_authenticated", "model_not_found"):
+        return error.kind
+    return "rate_limit_exceeded" if error.status == 429 else "server_error"
 
 
 async def _stream(
-    claude_cli, body: ResponsesRequest, completion_args, resp_id, msg_id, created
+    run: Run, body: ResponsesRequest, resp_id, msg_id, created
 ) -> AsyncGenerator[str, None]:
     """Yield the Responses API SSE event sequence for one run."""
     sequence = itertools.count()
@@ -305,44 +264,22 @@ async def _stream(
     part_ids = {"item_id": msg_id, "output_index": 0, "content_index": 0}
     yield event("response.content_part.added", **part_ids, part=text_part(""))
 
-    chunks: List[Dict[str, Any]] = []
     deltas: List[str] = []
-    sdk_error = None
     try:
-        async for chunk in claude_cli.run_completion(**completion_args, stream=True):
-            chunks.append(chunk)
-            # The ResultMessage repeats the whole text, so only assistant chunks are streamed
-            if sdk_usage.find_result_message([chunk]):
-                continue
-            # The CLI's own error text (login, model, rate limit...); reported as response.failed
-            if chunk.get("error"):
-                continue
-            text = claude_cli.parse_claude_message([chunk])
-            if text:
-                deltas.append(text)
-                yield event("response.output_text.delta", **part_ids, delta=text, logprobs=[])
-        from claude_relay import main
-
-        sdk_error = main._sdk_error(chunks)  # also records/clears the last login failure
-    except Exception as e:
-        logger.error(f"Responses streaming error: {e}")
-        sdk_error = {"status": 500, "message": str(e)}
-
-    if sdk_error:
-        if sdk_error.get("auth_failure"):
-            code = "claude_cli_not_authenticated"
-        elif sdk_error.get("code") == "model_not_found":
-            code = "model_not_found"
-        else:
-            code = "rate_limit_exceeded" if sdk_error["status"] == 429 else "server_error"
-        failed = _response(
-            body, resp_id, created, "failed", error={"code": code, "message": sdk_error["message"]}
-        )
+        async for item in run.stream():
+            if isinstance(item, str):
+                deltas.append(item)
+                yield event("response.output_text.delta", **part_ids, delta=item, logprobs=[])
+            else:
+                completion = item
+    except CompletionError as e:
+        error = {"code": _failure_code(e), "message": e.message}
+        failed = _response(body, resp_id, created, "failed", error=error)
         yield event("response.failed", response=failed.model_dump())
         return
 
     text = "".join(deltas)
-    final = _finished(body, resp_id, msg_id, created, chunks, completion_args["prompt"], text)
+    final = _finished(body, resp_id, msg_id, created, completion, text)
     yield event("response.output_text.done", **part_ids, text=text, logprobs=[])
     yield event("response.content_part.done", **part_ids, part=text_part(text))
     yield event("response.output_item.done", output_index=0, item=final.output[0].model_dump())

@@ -100,6 +100,7 @@ class TestAnthropicMessagesToolGating:
     def _post(self, payload, allow_tools=False):
         from unittest.mock import patch
         from fastapi.testclient import TestClient
+        import claude_relay.completion as completion
         import claude_relay.main as main
 
         captured = {}
@@ -109,9 +110,9 @@ class TestAnthropicMessagesToolGating:
             yield {"type": "assistant", "content": [{"type": "text", "text": "ok"}]}
 
         with (
-            patch.object(main, "validate_claude_code_auth", return_value=(True, {})),
-            patch.object(main.claude_cli, "run_completion", fake_run_completion),
-            patch.object(main.claude_cli, "parse_claude_message", return_value="ok"),
+            patch.object(completion, "validate_claude_code_auth", return_value=(True, {})),
+            patch.object(completion.claude_cli, "run_completion", fake_run_completion),
+            patch.object(completion.claude_cli, "parse_claude_message", return_value="ok"),
             patch.object(main.constants, "ALLOW_TOOLS", allow_tools),
         ):
             # Host must pass the ALLOWED_HOSTS check (TestClient defaults to "testserver")
@@ -128,8 +129,8 @@ class TestAnthropicMessagesToolGating:
         assert response.status_code == 200
         assert opts["max_turns"] == 1
         assert opts["disallowed_tools"] == CLAUDE_TOOLS
-        assert "permission_mode" not in opts
-        assert "allowed_tools" not in opts
+        assert opts["permission_mode"] is None
+        assert opts["allowed_tools"] is None
 
     def test_tools_enabled_on_request(self):
         from claude_relay.constants import DEFAULT_ALLOWED_TOOLS

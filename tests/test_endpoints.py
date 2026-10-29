@@ -7,6 +7,7 @@ def test_agentic_client_payload_accepted():
     developer role, extra fields) gets 200 from /v1/chat/completions, not 422."""
     from unittest.mock import patch
     from fastapi.testclient import TestClient
+    import claude_relay.completion as completion
     import claude_relay.main as main
 
     captured = {}
@@ -44,9 +45,9 @@ def test_agentic_client_payload_accepted():
     }
 
     with (
-        patch.object(main, "validate_claude_code_auth", return_value=(True, {})),
-        patch.object(main.claude_cli, "run_completion", fake_run_completion),
-        patch.object(main.claude_cli, "parse_claude_message", return_value="It is sunny."),
+        patch.object(completion, "validate_claude_code_auth", return_value=(True, {})),
+        patch.object(completion.claude_cli, "run_completion", fake_run_completion),
+        patch.object(completion.claude_cli, "parse_claude_message", return_value="It is sunny."),
     ):
         response = TestClient(main.app, base_url="http://localhost").post(
             "/v1/chat/completions", json=payload

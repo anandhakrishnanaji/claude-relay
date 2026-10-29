@@ -7,6 +7,7 @@ import openai
 import pytest
 from fastapi.testclient import TestClient
 
+import claude_relay.completion as completion
 import claude_relay.main as main
 from claude_relay.constants import CLAUDE_TOOLS
 
@@ -45,8 +46,8 @@ def _client(chunks):
             yield chunk
 
     with (
-        patch.object(main, "validate_claude_code_auth", return_value=(True, {})),
-        patch.object(main.claude_cli, "run_completion", fake_run_completion),
+        patch.object(completion, "validate_claude_code_auth", return_value=(True, {})),
+        patch.object(completion.claude_cli, "run_completion", fake_run_completion),
     ):
         yield TestClient(main.app, base_url="http://localhost"), captured
 
@@ -73,7 +74,7 @@ def test_string_input():
     assert opts["system_prompt"] is None
     assert opts["max_turns"] == 1
     assert opts["disallowed_tools"] == CLAUDE_TOOLS
-    assert "allowed_tools" not in opts and "permission_mode" not in opts
+    assert opts["allowed_tools"] is None and opts["permission_mode"] is None
 
 
 def test_message_list_input_and_instructions():

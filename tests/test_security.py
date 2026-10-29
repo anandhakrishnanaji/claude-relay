@@ -13,6 +13,7 @@ import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
+import claude_relay.completion as completion
 import claude_relay.main as main
 from claude_relay.constants import (
     CLAUDE_TOOLS,
@@ -156,9 +157,9 @@ class TestToolGate:
             yield {"type": "assistant", "content": [{"type": "text", "text": "ok"}]}
 
         with (
-            patch.object(main, "validate_claude_code_auth", return_value=(True, {})),
-            patch.object(main.claude_cli, "run_completion", fake_run_completion),
-            patch.object(main.claude_cli, "parse_claude_message", return_value="ok"),
+            patch.object(completion, "validate_claude_code_auth", return_value=(True, {})),
+            patch.object(completion.claude_cli, "run_completion", fake_run_completion),
+            patch.object(completion.claude_cli, "parse_claude_message", return_value="ok"),
             patch.object(main.constants, "ALLOW_TOOLS", allow_tools),
         ):
             client = TestClient(main.app, base_url="http://localhost")

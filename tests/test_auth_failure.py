@@ -18,6 +18,7 @@ import claude_relay.auth as auth
 import claude_relay.main as main
 from claude_relay import usage as sdk_usage
 from claude_relay.claude_cli import ClaudeCodeCLI
+from claude_relay.completion import claude_login_error
 from tests.test_real_usage import make_chunks, post, stream_events
 
 MODEL = "claude-haiku-4-5-20251001"
@@ -120,7 +121,7 @@ class TestEndpoints:
         response = chat(NOT_LOGGED_IN, stream=True)
         assert response.status_code == 200
         events = stream_events(response)
-        assert events == [main._openai_auth_error(main.ClaudeAuthError("not_logged_in"))]
+        assert events == [main.openai_error(claude_login_error("not_logged_in"))]
         assert CLI_TEXT not in response.text
 
     def test_last_failure_recorded_then_cleared(self):

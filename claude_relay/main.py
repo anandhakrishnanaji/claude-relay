@@ -4,7 +4,7 @@ import asyncio
 import logging
 import time
 import uuid
-from typing import Optional, AsyncGenerator, Dict, Any, List
+from typing import Optional, AsyncIterator, Dict, Any, List
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI, HTTPException, Request, Depends
@@ -33,17 +33,14 @@ from claude_relay.models import (
     AnthropicTextBlock,
     AnthropicUsage,
 )
-from claude_relay.claude_cli import ClaudeCodeCLI
-from claude_relay.message_adapter import MessageAdapter
 from claude_relay import usage as sdk_usage
 from claude_relay.auth import (
     verify_api_key,
     security,
     validate_claude_code_auth,
     get_claude_code_auth_info,
-    record_auth_failure,
 )
-from claude_relay.parameter_validator import ParameterValidator
+from claude_relay.completion import CompletionError, Run, claude_cli, prepare
 from claude_relay.responses_api import router as responses_router
 from claude_relay.session_manager import session_manager
 from claude_relay.rate_limiter import (
@@ -61,8 +58,6 @@ from claude_relay.constants import (
     CORS_ORIGINS,
     CLAUDE_MODELS,
     CLAUDE_MODEL_ALIASES,
-    CLAUDE_TOOLS,
-    DEFAULT_ALLOWED_TOOLS,
     DEFAULT_MODEL_FALLBACK,
     MODEL_LIST_CACHE_TTL_SECONDS,
     MODEL_LIST_ERROR_TTL_SECONDS,
@@ -260,12 +255,6 @@ async def resolve_default_model() -> Optional[str]:
     return None
 
 
-# Initialize Claude CLI
-claude_cli = ClaudeCodeCLI(
-    timeout=int(os.getenv("MAX_TIMEOUT", "600000")), cwd=os.getenv("CLAUDE_CWD")
-)
-
-
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """Verify Claude Code authentication and CLI on startup."""
@@ -285,13 +274,15 @@ async def lifespan(app: FastAPI):
     else:
         logger.info(f"✅ Claude Code authentication validated: {auth_info['method']}")
 
-    # `claude auth status`: checks the CLI runs and is logged in, without a model call
-    if await claude_cli.verify_cli():
-        logger.info("✅ Claude Code CLI found and logged in")
-    else:
-        logger.warning(
-            "⚠️  Claude Code CLI check failed; the server will start, but requests may fail"
-        )
+    # `claude auth status`: checks the CLI runs and is logged in, without a model call.
+    # Only the CLI login uses it; API key, Bedrock and Vertex auth would fail it.
+    if auth_info.get("method") == "claude_cli":
+        if await claude_cli.verify_cli():
+            logger.info("✅ Claude Code CLI found and logged in")
+        else:
+            logger.warning(
+                "⚠️  Claude Code CLI check failed; the server will start, but requests may fail"
+            )
 
     # Log debug information if debug mode is enabled
     if DEBUG_MODE or VERBOSE:
@@ -425,17 +416,17 @@ class RequestSizeLimitMiddleware:
         self.app = app
         self.max_size = max_size
 
-    def _too_large(self) -> JSONResponse:
-        return JSONResponse(
-            status_code=413,
-            content={
-                "error": {
-                    "message": f"Request body too large. Maximum size is {self.max_size} bytes.",
-                    "type": "request_too_large",
-                    "code": 413,
-                }
-            },
-        )
+    @staticmethod
+    def _error(scope, status: int, error_type: str, message: str) -> JSONResponse:
+        if is_anthropic_path(scope["path"]):
+            content = anthropic_error(status, message)
+        else:
+            content = {"error": {"message": message, "type": error_type, "code": status}}
+        return JSONResponse(status_code=status, content=content)
+
+    def _too_large(self, scope) -> JSONResponse:
+        message = f"Request body too large. Maximum size is {self.max_size} bytes."
+        return self._error(scope, 413, "request_too_large", message)
 
     async def __call__(self, scope, receive, send):
         if scope["type"] != "http":
@@ -445,15 +436,13 @@ class RequestSizeLimitMiddleware:
         content_length = Headers(scope=scope).get("content-length")
         if content_length is not None:
             if not content_length.isdigit():
-                error = {
-                    "message": "Invalid Content-Length header",
-                    "type": "invalid_request_error",
-                    "code": 400,
-                }
-                await JSONResponse(status_code=400, content={"error": error})(scope, receive, send)
+                error = self._error(
+                    scope, 400, "invalid_request_error", "Invalid Content-Length header"
+                )
+                await error(scope, receive, send)
                 return
             if int(content_length) > self.max_size:
-                await self._too_large()(scope, receive, send)
+                await self._too_large(scope)(scope, receive, send)
                 return
 
         received = 0
@@ -470,7 +459,7 @@ class RequestSizeLimitMiddleware:
                 if received > self.max_size:
                     rejected = True
                     if not response_started:
-                        await self._too_large()(scope, receive, send)
+                        await self._too_large(scope)(scope, receive, send)
                     # The app sees a disconnect and stops; its own reply is dropped below
                     return {"type": "http.disconnect"}
             return message
@@ -577,6 +566,13 @@ async def validation_exception_handler(request: Request, exc: RequestValidationE
         f"❌ Validation errors: {[{k: v for k, v in e.items() if k != 'input'} for e in exc.errors()]}"
     )
 
+    if is_anthropic_path(request.url.path):
+        message = "; ".join(
+            f"{'.'.join(str(loc) for loc in error.get('loc', []))}: {error.get('msg')}"
+            for error in exc.errors()
+        )
+        return JSONResponse(status_code=422, content=anthropic_error(422, message))
+
     # Create detailed error response
     error_details = []
     for error in exc.errors():
@@ -625,311 +621,107 @@ async def validation_exception_handler(request: Request, exc: RequestValidationE
     return JSONResponse(status_code=422, content=error_response)
 
 
-class ClaudeAuthError(HTTPException):
-    """The Claude Code CLI on this host is not logged in, or its login expired."""
-
-    def __init__(self, kind: str):
-        super().__init__(
-            status_code=401,
-            detail=(
-                f"Claude Code on the server is not authenticated ({kind}). The server operator "
-                "must run `claude auth login` on the host (or set CLAUDE_CODE_OAUTH_TOKEN), "
-                "then retry."
-            ),
-        )
-
-
-def _openai_auth_error(exc: ClaudeAuthError) -> Dict[str, Any]:
-    return {
-        "error": {
-            "message": exc.detail,
-            "type": "authentication_error",
-            "code": "claude_cli_not_authenticated",
-        }
-    }
-
-
 def _openai_error(status: int, message: Any) -> Dict[str, Any]:
     return {"error": {"message": message, "type": "api_error", "code": str(status)}}
 
 
-@app.exception_handler(ClaudeAuthError)
-async def claude_auth_error_handler(request: Request, exc: ClaudeAuthError):
-    """Return the 401 in the calling endpoint's native error format."""
-    if request.url.path.startswith("/v1/messages"):
-        content = {
-            "type": "error",
-            "error": {"type": "authentication_error", "message": exc.detail},
-        }
+# CompletionError kinds with their own OpenAI error type; the rest are api_error
+_OPENAI_ERROR_TYPES = {
+    "claude_cli_not_authenticated": "authentication_error",
+    "model_not_found": "invalid_request_error",
+    "tools_disabled": "permission_error",
+}
+
+ANTHROPIC_ERROR_TYPES = {
+    400: "invalid_request_error",
+    401: "authentication_error",
+    403: "permission_error",
+    404: "not_found_error",
+    413: "request_too_large",
+    422: "invalid_request_error",
+    429: "rate_limit_error",
+    529: "overloaded_error",
+}
+
+
+def openai_error(exc: CompletionError) -> Dict[str, Any]:
+    if exc.kind not in _OPENAI_ERROR_TYPES:
+        return _openai_error(exc.status, exc.message)
+    error = {"message": exc.message, "type": _OPENAI_ERROR_TYPES[exc.kind], "code": exc.kind}
+    if exc.kind == "model_not_found":
+        error["param"] = "model"
+    return {"error": error}
+
+
+def anthropic_error(status: int, message: Any) -> Dict[str, Any]:
+    error_type = ANTHROPIC_ERROR_TYPES.get(status, "api_error")
+    return {"type": "error", "error": {"type": error_type, "message": message}}
+
+
+def is_anthropic_path(path: str) -> bool:
+    return path.startswith("/v1/messages")
+
+
+@app.exception_handler(CompletionError)
+async def completion_error_handler(request: Request, exc: CompletionError):
+    """Render a failed request in the calling endpoint's native error format."""
+    if is_anthropic_path(request.url.path):
+        content = anthropic_error(exc.status, exc.message)
     else:
-        content = _openai_auth_error(exc)
-    return JSONResponse(status_code=401, content=content)
+        content = openai_error(exc)
+    return JSONResponse(status_code=exc.status, content=content)
 
 
-def _sdk_error(chunks: List[Dict[str, Any]]) -> Optional[Dict[str, Any]]:
-    """usage.result_error(), also tracking the last Claude Code login failure."""
-    sdk_error = sdk_usage.result_error(chunks)
-    if not sdk_error:
-        record_auth_failure(None)
-    elif sdk_error.get("auth_failure"):
-        logger.warning(f"Claude Code login failure: {sdk_error['message']}")
-        record_auth_failure(sdk_error["auth_failure"])
-    return sdk_error
+def sse(event: str, data: Dict[str, Any]) -> str:
+    return f"event: {event}\ndata: {json.dumps(data)}\n\n"
 
 
-def _raise_for_sdk_error(chunks: List[Dict[str, Any]]) -> None:
-    sdk_error = _sdk_error(chunks)
-    if not sdk_error:
-        return
-    if sdk_error.get("auth_failure"):
-        raise ClaudeAuthError(sdk_error["auth_failure"])
-    raise HTTPException(status_code=sdk_error["status"], detail=sdk_error["message"])
+async def start_stream(events: AsyncIterator[str]) -> StreamingResponse:
+    """Stream SSE events, but wait for the first one so an unknown model is a plain 400."""
+    first = await events.__anext__()  # a CompletionError here becomes a normal HTTP error
 
+    async def all_events():
+        yield first
+        async for event in events:
+            yield event
 
-async def generate_streaming_response(
-    request: ChatCompletionRequest, request_id: str, claude_headers: Optional[Dict[str, Any]] = None
-) -> AsyncGenerator[str, None]:
-    """Generate SSE formatted streaming response."""
-    try:
-        # Process messages with session management
-        all_messages, actual_session_id = session_manager.process_messages(
-            request.messages, request.session_id
-        )
-
-        # Convert messages to prompt
-        prompt, system_prompt = MessageAdapter.messages_to_prompt(all_messages)
-
-        # Add sampling instructions from temperature/top_p if present
-        sampling_instructions = request.get_sampling_instructions()
-        if sampling_instructions:
-            if system_prompt:
-                system_prompt = f"{system_prompt}\n\n{sampling_instructions}"
-            else:
-                system_prompt = sampling_instructions
-            logger.debug(f"Added sampling instructions: {sampling_instructions}")
-
-        # Get Claude Agent SDK options from request
-        claude_options = request.to_claude_options()
-
-        # Merge with Claude-specific headers if provided
-        if claude_headers:
-            claude_options.update(claude_headers)
-
-        # Handle tools - disabled by default for OpenAI compatibility
-        if not request.enable_tools:
-            # Disable all tools by using CLAUDE_TOOLS constant
-            claude_options["disallowed_tools"] = CLAUDE_TOOLS
-            claude_options["max_turns"] = 1  # Single turn for Q&A
-            logger.info("Tools disabled (default behavior for OpenAI compatibility)")
-        else:
-            # Enable tools - use default safe subset (Read, Glob, Grep, Bash, Write, Edit)
-            claude_options["allowed_tools"] = DEFAULT_ALLOWED_TOOLS
-            # Set permission mode to bypass prompts (required for API/headless usage)
-            claude_options["permission_mode"] = "bypassPermissions"
-            logger.info(f"Tools enabled by user request: {DEFAULT_ALLOWED_TOOLS}")
-
-        # Run Claude Code
-        chunks_buffer = []
-        role_sent = False  # Track if we've sent the initial role chunk
-        response_model = request.model  # Replaced by the real model once the SDK reports it
-
-        async for chunk in claude_cli.run_completion(
-            prompt=prompt,
-            system_prompt=system_prompt,
-            model=claude_options.get("model"),
-            max_turns=claude_options.get("max_turns", 10),
-            allowed_tools=claude_options.get("allowed_tools"),
-            disallowed_tools=claude_options.get("disallowed_tools"),
-            permission_mode=claude_options.get("permission_mode"),
-            thinking=ParameterValidator.thinking_from_budget(
-                claude_options.get("max_thinking_tokens")
-            ),
-            effort=claude_options.get("effort"),
-            fallback_model=claude_options.get("fallback_model"),
-            stream=True,
-        ):
-            chunks_buffer.append(chunk)
-            response_model = sdk_usage.extract_model([chunk], response_model)
-            if chunk.get("error") == "model_not_found" and not role_sent:
-                raise ModelNotFoundError(
-                    claude_cli.parse_claude_message([chunk]) or "Unknown model"
-                )
-            if chunk.get("error"):
-                continue  # the CLI's own error text (login, rate limit...); reported below
-
-            # Check if we have an assistant message
-            # Handle both old format (type/message structure) and new format (direct content)
-            content = None
-            if chunk.get("type") == "assistant" and "message" in chunk:
-                # Old format: {"type": "assistant", "message": {"content": [...]}}
-                message = chunk["message"]
-                if isinstance(message, dict) and "content" in message:
-                    content = message["content"]
-            elif "content" in chunk and isinstance(chunk["content"], list):
-                # New format: {"content": [TextBlock(...)]}  (converted AssistantMessage)
-                content = chunk["content"]
-
-            if content is not None:
-                # Send initial role chunk if we haven't already
-                if not role_sent:
-                    initial_chunk = ChatCompletionStreamResponse(
-                        id=request_id,
-                        model=response_model,
-                        choices=[
-                            StreamChoice(
-                                index=0,
-                                delta={"role": "assistant", "content": ""},
-                                finish_reason=None,
-                            )
-                        ],
-                    )
-                    yield f"data: {initial_chunk.model_dump_json()}\n\n"
-                    role_sent = True
-
-                # Handle content blocks
-                if isinstance(content, list):
-                    for block in content:
-                        # Handle TextBlock objects from Claude Agent SDK
-                        if hasattr(block, "text"):
-                            raw_text = block.text
-                        # Handle dictionary format for backward compatibility
-                        elif isinstance(block, dict) and block.get("type") == "text":
-                            raw_text = block.get("text", "")
-                        else:
-                            continue
-
-                        if raw_text:
-                            # Create streaming chunk
-                            stream_chunk = ChatCompletionStreamResponse(
-                                id=request_id,
-                                model=response_model,
-                                choices=[
-                                    StreamChoice(
-                                        index=0,
-                                        delta={"content": raw_text},
-                                        finish_reason=None,
-                                    )
-                                ],
-                            )
-
-                            yield f"data: {stream_chunk.model_dump_json()}\n\n"
-
-                elif isinstance(content, str):
-                    if content:
-                        # Create streaming chunk
-                        stream_chunk = ChatCompletionStreamResponse(
-                            id=request_id,
-                            model=response_model,
-                            choices=[
-                                StreamChoice(
-                                    index=0, delta={"content": content}, finish_reason=None
-                                )
-                            ],
-                        )
-
-                        yield f"data: {stream_chunk.model_dump_json()}\n\n"
-
-        sdk_error = _sdk_error(chunks_buffer)
-        if sdk_error:
-            # The 200 status line is already sent, so report it as a final error event
-            if sdk_error.get("auth_failure"):
-                error_chunk = _openai_auth_error(ClaudeAuthError(sdk_error["auth_failure"]))
-            else:
-                error_chunk = _openai_error(sdk_error["status"], sdk_error["message"])
-            yield f"data: {json.dumps(error_chunk)}\n\n"
-            return
-
-        # Handle case where no role was sent (send at least role chunk)
-        if not role_sent:
-            # Send role chunk with empty content if we never got any assistant messages
-            initial_chunk = ChatCompletionStreamResponse(
-                id=request_id,
-                model=response_model,
-                choices=[
-                    StreamChoice(
-                        index=0, delta={"role": "assistant", "content": ""}, finish_reason=None
-                    )
-                ],
-            )
-            yield f"data: {initial_chunk.model_dump_json()}\n\n"
-            role_sent = True
-
-        # Extract assistant response from all chunks
-        assistant_content = None
-        if chunks_buffer:
-            assistant_content = claude_cli.parse_claude_message(chunks_buffer)
-
-            # Store in session if applicable
-            if actual_session_id and assistant_content:
-                assistant_message = Message(role="assistant", content=assistant_content)
-                session_manager.add_assistant_response(actual_session_id, assistant_message)
-
-        # Prepare usage data if requested
-        usage_data = None
-        if request.stream_options and request.stream_options.include_usage:
-            # Real usage from the SDK result message; estimate only if it has none
-            usage_data = Usage(
-                **sdk_usage.openai_usage_counts(
-                    chunks_buffer,
-                    MessageAdapter.estimate_tokens(prompt),
-                    MessageAdapter.estimate_tokens(assistant_content),
-                )
-            )
-            logger.debug(f"Usage: {usage_data}")
-
-        # Send final chunk with finish reason and optionally usage data
-        final_chunk = ChatCompletionStreamResponse(
-            id=request_id,
-            model=response_model,
-            choices=[
-                StreamChoice(
-                    index=0, delta={}, finish_reason=sdk_usage.openai_finish_reason(chunks_buffer)
-                )
-            ],
-            usage=usage_data,
-        )
-        yield f"data: {final_chunk.model_dump_json()}\n\n"
-        yield "data: [DONE]\n\n"
-
-    except ModelNotFoundError:
-        raise  # chat_completions turns it into a 400 before the stream starts
-    except Exception as e:
-        logger.error(f"Streaming error: {e}")
-        error_chunk = {"error": {"message": str(e), "type": "streaming_error"}}
-        yield f"data: {json.dumps(error_chunk)}\n\n"
-
-
-class ModelNotFoundError(Exception):
-    """The CLI rejected the requested model before producing any output."""
-
-
-def model_error_response(message: str, anthropic: bool = False) -> JSONResponse:
-    """400 for an unknown model, in the OpenAI or Anthropic error format."""
-    if anthropic:
-        content = {"type": "error", "error": {"type": "invalid_request_error", "message": message}}
-    else:
-        content = {
-            "error": {
-                "message": message,
-                "type": "invalid_request_error",
-                "param": "model",
-                "code": "model_not_found",
-            }
-        }
-    return JSONResponse(status_code=400, content=content)
-
-
-def unknown_model_message(model: str) -> str:
-    return (
-        f"The model '{model}' is not a Claude model. Use a Claude model ID or alias "
-        "(see /v1/models), or map it with MODEL_ALIASES on the server."
+    return StreamingResponse(
+        all_events(),
+        media_type="text/event-stream",
+        headers={"Cache-Control": "no-cache", "Connection": "keep-alive"},
     )
 
 
-TOOLS_DISABLED_MESSAGE = (
-    "enable_tools is disabled on this server. Set ALLOW_TOOLS=true on the server to allow "
-    "requests to run Claude Code tools (Bash, Write, Edit) with permissions bypassed."
-)
+async def chat_stream(run: Run, request_id: str, include_usage: bool) -> AsyncIterator[str]:
+    """OpenAI chat.completion.chunk events for one run."""
+
+    def chunk(delta: Dict[str, Any], finish_reason=None, usage=None) -> str:
+        choice = StreamChoice(index=0, delta=delta, finish_reason=finish_reason)
+        event = ChatCompletionStreamResponse(
+            id=request_id, model=run.model, choices=[choice], usage=usage
+        )
+        return f"data: {event.model_dump_json()}\n\n"
+
+    role_sent = False
+    try:
+        async for item in run.stream():
+            if not role_sent:
+                yield chunk({"role": "assistant", "content": ""})
+                role_sent = True
+            if isinstance(item, str):
+                yield chunk({"content": item})
+            else:
+                completion = item
+    except CompletionError as e:
+        if e.kind == "model_not_found" and not role_sent:
+            raise
+        # The 200 status line is already sent, so report it as a final error event
+        yield f"data: {json.dumps(openai_error(e))}\n\n"
+        return
+
+    usage = Usage(**completion.openai_usage()) if include_usage else None
+    yield chunk({}, sdk_usage.openai_finish_reason(completion.chunks), usage)
+    yield "data: [DONE]\n\n"
 
 
 @app.post("/v1/chat/completions")
@@ -940,174 +732,96 @@ async def chat_completions(
     credentials: Optional[HTTPAuthorizationCredentials] = Depends(security),
 ):
     """OpenAI-compatible chat completions endpoint."""
-    # Check FastAPI API key if configured
     await verify_api_key(request, credentials)
 
-    # Covers the streaming path too, which reads request_body.enable_tools later
-    if request_body.enable_tools and not constants.ALLOW_TOOLS:
-        return JSONResponse(
-            status_code=403,
-            content={
-                "error": {
-                    "message": TOOLS_DISABLED_MESSAGE,
-                    "type": "permission_error",
-                    "code": "tools_disabled",
-                }
-            },
+    run = prepare(
+        model=request_body.model,
+        messages=request_body.messages,
+        enable_tools=bool(request_body.enable_tools),
+        headers=request.headers,
+        effort=request_body.to_claude_options().get("effort"),
+        system_suffix=request_body.get_sampling_instructions(),
+        session_id=request_body.session_id,
+    )
+    request_id = f"chatcmpl-{os.urandom(8).hex()}"
+
+    if request_body.stream:
+        include_usage = bool(
+            request_body.stream_options and request_body.stream_options.include_usage
         )
+        return await start_stream(chat_stream(run, request_id, include_usage))
 
-    # Validate Claude Code authentication
-    auth_valid, auth_info = validate_claude_code_auth()
+    completion = await run.complete()
+    return ChatCompletionResponse(
+        id=request_id,
+        model=completion.model,
+        choices=[
+            Choice(
+                index=0,
+                message=Message(role="assistant", content=completion.text),
+                finish_reason=sdk_usage.openai_finish_reason(completion.chunks),
+            )
+        ],
+        usage=Usage(**completion.openai_usage()),
+    )
 
-    if not auth_valid:
-        error_detail = {
-            "message": "Claude Code authentication failed",
-            "errors": auth_info.get("errors", []),
-            "method": auth_info.get("method", "none"),
-            "help": "Check /v1/auth/status for detailed authentication information",
-        }
-        raise HTTPException(status_code=503, detail=error_detail)
+
+async def messages_stream(run: Run) -> AsyncIterator[str]:
+    """Anthropic Messages SSE events for one run (shapes from anthropic.types)."""
+    message_id = f"msg_{uuid.uuid4().hex[:24]}"
+    started = False
+
+    def start_events() -> List[str]:
+        message = AnthropicMessagesResponse(
+            id=message_id,
+            model=run.model,
+            content=[],
+            stop_reason=None,
+            usage=AnthropicUsage(input_tokens=0, output_tokens=0),
+        )
+        return [
+            sse("message_start", {"type": "message_start", "message": message.model_dump()}),
+            sse(
+                "content_block_start",
+                {
+                    "type": "content_block_start",
+                    "index": 0,
+                    "content_block": {"type": "text", "text": ""},
+                },
+            ),
+        ]
 
     try:
-        request_id = f"chatcmpl-{os.urandom(8).hex()}"
-
-        # Extract Claude-specific parameters from headers
-        claude_headers = ParameterValidator.extract_claude_headers(dict(request.headers))
-
-        # Apply MODEL_ALIASES; the merged options override the request's own model
-        model = ParameterValidator.resolve_model(request_body.model)
-        if model is None:
-            return model_error_response(unknown_model_message(request_body.model))
-        claude_headers["model"] = model
-
-        if request_body.stream:
-            # Return streaming response
-            stream = generate_streaming_response(request_body, request_id, claude_headers)
-            # Wait for the first event so an unknown model is still a plain 400
-            try:
-                first_event = await stream.__anext__()
-            except ModelNotFoundError as e:
-                return model_error_response(str(e))
-
-            async def events():
-                yield first_event
-                async for event in stream:
+        async for item in run.stream():
+            if not started:
+                for event in start_events():
                     yield event
-
-            return StreamingResponse(
-                events(),
-                media_type="text/event-stream",
-                headers={
-                    "Cache-Control": "no-cache",
-                    "Connection": "keep-alive",
-                },
-            )
-        else:
-            # Non-streaming response
-            # Process messages with session management
-            all_messages, actual_session_id = session_manager.process_messages(
-                request_body.messages, request_body.session_id
-            )
-
-            logger.info(
-                f"Chat completion: session_id={actual_session_id}, total_messages={len(all_messages)}"
-            )
-
-            # Convert messages to prompt
-            prompt, system_prompt = MessageAdapter.messages_to_prompt(all_messages)
-
-            # Add sampling instructions from temperature/top_p if present
-            sampling_instructions = request_body.get_sampling_instructions()
-            if sampling_instructions:
-                if system_prompt:
-                    system_prompt = f"{system_prompt}\n\n{sampling_instructions}"
-                else:
-                    system_prompt = sampling_instructions
-                logger.debug(f"Added sampling instructions: {sampling_instructions}")
-
-            # Get Claude Agent SDK options from request
-            claude_options = request_body.to_claude_options()
-
-            # Merge with Claude-specific headers
-            if claude_headers:
-                claude_options.update(claude_headers)
-
-            # Handle tools - disabled by default for OpenAI compatibility
-            if not request_body.enable_tools:
-                # Disable all tools by using CLAUDE_TOOLS constant
-                claude_options["disallowed_tools"] = CLAUDE_TOOLS
-                claude_options["max_turns"] = 1  # Single turn for Q&A
-                logger.info("Tools disabled (default behavior for OpenAI compatibility)")
+                started = True
+            if isinstance(item, str):
+                delta = {"type": "text_delta", "text": item}
+                yield sse(
+                    "content_block_delta",
+                    {"type": "content_block_delta", "index": 0, "delta": delta},
+                )
             else:
-                # Enable tools - use default safe subset (Read, Glob, Grep, Bash, Write, Edit)
-                claude_options["allowed_tools"] = DEFAULT_ALLOWED_TOOLS
-                # Set permission mode to bypass prompts (required for API/headless usage)
-                claude_options["permission_mode"] = "bypassPermissions"
-                logger.info(f"Tools enabled by user request: {DEFAULT_ALLOWED_TOOLS}")
+                completion = item
+    except CompletionError as e:
+        if e.kind == "model_not_found" and not started:
+            raise
+        yield sse("error", anthropic_error(e.status, e.message))
+        return
 
-            # Collect all chunks
-            chunks = []
-            async for chunk in claude_cli.run_completion(
-                prompt=prompt,
-                system_prompt=system_prompt,
-                model=claude_options.get("model"),
-                max_turns=claude_options.get("max_turns", 10),
-                allowed_tools=claude_options.get("allowed_tools"),
-                disallowed_tools=claude_options.get("disallowed_tools"),
-                permission_mode=claude_options.get("permission_mode"),
-                thinking=ParameterValidator.thinking_from_budget(
-                    claude_options.get("max_thinking_tokens")
-                ),
-                effort=claude_options.get("effort"),
-                fallback_model=claude_options.get("fallback_model"),
-                stream=False,
-            ):
-                chunks.append(chunk)
-
-            sdk_error = sdk_usage.result_error(chunks)
-            if sdk_error and sdk_error.get("code") == "model_not_found":
-                return model_error_response(sdk_error["message"])
-            _raise_for_sdk_error(chunks)
-
-            # Extract assistant message
-            assistant_content = claude_cli.parse_claude_message(chunks)
-
-            if not assistant_content:
-                raise HTTPException(status_code=500, detail="No response from Claude Code")
-
-            # Add assistant response to session if using session mode
-            if actual_session_id:
-                assistant_message = Message(role="assistant", content=assistant_content)
-                session_manager.add_assistant_response(actual_session_id, assistant_message)
-
-            # Real usage from the SDK result message; estimate only if it has none
-            token_usage = sdk_usage.openai_usage_counts(
-                chunks,
-                MessageAdapter.estimate_tokens(prompt),
-                MessageAdapter.estimate_tokens(assistant_content),
-            )
-
-            # Create response
-            response = ChatCompletionResponse(
-                id=request_id,
-                model=sdk_usage.extract_model(chunks, request_body.model),
-                choices=[
-                    Choice(
-                        index=0,
-                        message=Message(role="assistant", content=assistant_content),
-                        finish_reason=sdk_usage.openai_finish_reason(chunks),
-                    )
-                ],
-                usage=Usage(**token_usage),
-            )
-
-            return response
-
-    except HTTPException:
-        raise
-    except Exception as e:
-        logger.error(f"Chat completion error: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
+    stop_reason = sdk_usage.anthropic_stop_reason(completion.chunks)
+    yield sse("content_block_stop", {"type": "content_block_stop", "index": 0})
+    yield sse(
+        "message_delta",
+        {
+            "type": "message_delta",
+            "delta": {"stop_reason": stop_reason, "stop_sequence": None},
+            "usage": completion.anthropic_usage(),
+        },
+    )
+    yield sse("message_stop", {"type": "message_stop"})
 
 
 @app.post("/v1/messages")
@@ -1117,121 +831,31 @@ async def anthropic_messages(
     request: Request,
     credentials: Optional[HTTPAuthorizationCredentials] = Depends(security),
 ):
-    """Anthropic Messages API compatible endpoint.
-
-    This endpoint provides compatibility with the native Anthropic SDK,
-    allowing tools like VC to use this wrapper via the VC_API_BASE setting.
-    """
-    # Check FastAPI API key if configured
+    """Anthropic Messages API compatible endpoint."""
     await verify_api_key(request, credentials)
 
-    if request_body.enable_tools and not constants.ALLOW_TOOLS:
-        return JSONResponse(
-            status_code=403,
-            content={
-                "type": "error",
-                "error": {"type": "permission_error", "message": TOOLS_DISABLED_MESSAGE},
-            },
-        )
+    system = request_body.system_text()
+    messages = [Message(role="system", content=system)] if system else []
+    run = prepare(
+        model=request_body.model,
+        messages=messages + request_body.to_openai_messages(),
+        enable_tools=bool(request_body.enable_tools),
+        thinking=(
+            request_body.thinking.model_dump(exclude_none=True) if request_body.thinking else None
+        ),
+        effort=request_body.output_config.effort if request_body.output_config else None,
+    )
 
-    # Validate Claude Code authentication
-    auth_valid, auth_info = validate_claude_code_auth()
+    if request_body.stream:
+        return await start_stream(messages_stream(run))
 
-    if not auth_valid:
-        error_detail = {
-            "message": "Claude Code authentication failed",
-            "errors": auth_info.get("errors", []),
-            "method": auth_info.get("method", "none"),
-            "help": "Check /v1/auth/status for detailed authentication information",
-        }
-        raise HTTPException(status_code=503, detail=error_detail)
-
-    try:
-        logger.info(f"Anthropic Messages API request: model={request_body.model}")
-
-        model = ParameterValidator.resolve_model(request_body.model)
-        if model is None:
-            return model_error_response(unknown_model_message(request_body.model), anthropic=True)
-
-        # Convert Anthropic messages to internal format
-        messages = request_body.to_openai_messages()
-
-        # Build prompt from messages
-        prompt_parts = []
-        for msg in messages:
-            if msg.role == "user":
-                prompt_parts.append(msg.content)
-            elif msg.role == "assistant":
-                prompt_parts.append(f"Assistant: {msg.content}")
-
-        prompt = "\n\n".join(prompt_parts)
-        system_prompt = request_body.system_text()
-
-        # Tools are disabled by default, same as /v1/chat/completions: the prompt
-        # may carry untrusted text, and with tools on it would drive an agent that
-        # can run Bash with permissions bypassed.
-        if request_body.enable_tools:
-            tool_options = {
-                "max_turns": 10,
-                "allowed_tools": DEFAULT_ALLOWED_TOOLS,
-                "permission_mode": "bypassPermissions",
-            }
-            logger.info(f"Tools enabled by user request: {DEFAULT_ALLOWED_TOOLS}")
-        else:
-            tool_options = {"max_turns": 1, "disallowed_tools": CLAUDE_TOOLS}
-
-        chunks = []
-        async for chunk in claude_cli.run_completion(
-            prompt=prompt,
-            system_prompt=system_prompt,
-            model=model,
-            stream=False,
-            thinking=(
-                request_body.thinking.model_dump(exclude_none=True)
-                if request_body.thinking
-                else None
-            ),
-            effort=request_body.output_config.effort if request_body.output_config else None,
-            **tool_options,
-        ):
-            chunks.append(chunk)
-
-        sdk_error = sdk_usage.result_error(chunks)
-        if sdk_error and sdk_error.get("code") == "model_not_found":
-            return model_error_response(sdk_error["message"], anthropic=True)
-        _raise_for_sdk_error(chunks)
-
-        # Extract assistant message
-        assistant_content = claude_cli.parse_claude_message(chunks)
-
-        if not assistant_content:
-            raise HTTPException(status_code=500, detail="No response from Claude Code")
-
-        # Real usage from the SDK result message; estimate only if it has none
-        real_usage = sdk_usage.extract_usage(chunks)
-        if real_usage:
-            anthropic_usage = AnthropicUsage(**real_usage)
-        else:
-            anthropic_usage = AnthropicUsage(
-                input_tokens=MessageAdapter.estimate_tokens(prompt),
-                output_tokens=MessageAdapter.estimate_tokens(assistant_content),
-            )
-
-        # Create Anthropic-format response
-        response = AnthropicMessagesResponse(
-            model=sdk_usage.extract_model(chunks, request_body.model),
-            content=[AnthropicTextBlock(text=assistant_content)],
-            stop_reason=sdk_usage.anthropic_stop_reason(chunks),
-            usage=anthropic_usage,
-        )
-
-        return response
-
-    except HTTPException:
-        raise
-    except Exception as e:
-        logger.error(f"Anthropic Messages API error: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
+    completion = await run.complete()
+    return AnthropicMessagesResponse(
+        model=completion.model,
+        content=[AnthropicTextBlock(text=completion.text)],
+        stop_reason=sdk_usage.anthropic_stop_reason(completion.chunks),
+        usage=AnthropicUsage(**completion.anthropic_usage()),
+    )
 
 
 @app.get("/v1/models")
@@ -1957,10 +1581,12 @@ async def delete_session(
 
 @app.exception_handler(HTTPException)
 async def http_exception_handler(request: Request, exc: HTTPException):
-    """Format HTTP exceptions as OpenAI-style errors."""
-    return JSONResponse(
-        status_code=exc.status_code, content=_openai_error(exc.status_code, exc.detail)
-    )
+    """Format HTTP exceptions as OpenAI- or Anthropic-style errors."""
+    if is_anthropic_path(request.url.path):
+        content = anthropic_error(exc.status_code, exc.detail)
+    else:
+        content = _openai_error(exc.status_code, exc.detail)
+    return JSONResponse(status_code=exc.status_code, content=content)
 
 
 if __name__ == "__main__":
