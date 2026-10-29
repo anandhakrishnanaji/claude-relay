@@ -65,7 +65,7 @@ Do this once per project (and again if the repo or workflow file is renamed).
 |---|---|
 | `build` | Checks the tag matches `pyproject.toml`; checks whether the version is already on PyPI; runs the tests; builds the wheel and sdist; installs the wheel and runs `claude-relay --version` |
 | `pypi` | Uploads to PyPI via trusted publishing. **Skipped** if the version is already on PyPI (for example, uploaded by hand) |
-| `docker` | Builds `deploy/Dockerfile` for amd64 and arm64 and pushes to GHCR |
+| `docker` | Builds `Dockerfile` for amd64 and arm64 and pushes to GHCR |
 | `github-release` | Creates the GitHub release with the built files. Runs even when `pypi` was skipped |
 
 ## Checking a release

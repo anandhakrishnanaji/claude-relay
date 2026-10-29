@@ -51,10 +51,6 @@ jobs:
       - name: Security scan
         run: poetry run bandit -r claude_relay/ -ll -x tests
 
-      - name: Dependency vulnerability scan
-        run: poetry run safety check || true
-        continue-on-error: true
-
       - name: Run tests
         run: poetry run pytest tests/ -v --cov=claude_relay --cov-report=xml --cov-report=term-missing
 

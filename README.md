@@ -42,7 +42,7 @@ See [INSTALL.md](./INSTALL.md) for pipx/pip, an always-on service and Docker.
 - **Tools off by default.** Both endpoints run a single turn without tools, so untrusted text in a prompt can't run commands. To give Claude its Bash/Read/Write tools, the server must set `ALLOW_TOOLS=true` and the request must send `"enable_tools": true`.
 - **Isolated from host settings.** Requests don't load the host's `~/.claude/CLAUDE.md`, settings, skills or plugins. Set `CLAUDE_SETTING_SOURCES=user,project,local` to opt back in.
 - **Flexible auth.** Claude CLI login (subscription), `ANTHROPIC_API_KEY`, AWS Bedrock or Google Vertex AI, auto-detected.
-- **Ships deploy tooling.** `scripts/install-service.sh` sets up an always-on systemd user service, and `deploy/Dockerfile` is a non-root production image. See [Always-on local service](#always-on-local-service-linux-systemd) and [Docker](#docker).
+- **Ships deploy tooling.** `scripts/install-service.sh` sets up an always-on systemd user service, and the `Dockerfile` builds a non-root production image. See [Always-on local service](#always-on-local-service-linux-systemd) and [Docker](#docker).
 
 ## What is claude-relay for?
 
@@ -323,11 +323,11 @@ docker run -d --name claude-relay --restart unless-stopped \
 ```
 
 - The `~/.claude` mount is read-write so the CLI can refresh its login token. To use an API key instead, drop the mount and pass `-e ANTHROPIC_API_KEY=...`.
-- If your uid isn't 1000, build the image yourself: `docker build -f deploy/Dockerfile --build-arg UID=$(id -u) --build-arg GID=$(id -g) -t claude-relay .`
+- If your uid isn't 1000, build the image yourself: `docker build --build-arg UID=$(id -u) --build-arg GID=$(id -g) -t claude-relay .`
 - To give Claude a workspace, add `-v /path/to/project:/workspace -e CLAUDE_CWD=/workspace`.
 - `-p 127.0.0.1:8000:8000` keeps it local. If you publish the port more widely, add `-e API_KEY=...`.
 
-The `Dockerfile` in the repo root builds the same non-root image, and the included `docker-compose.yml` uses it.
+The image is built from the `Dockerfile` in the repo root, with the dependency versions pinned in `poetry.lock`. The included `docker-compose.yml` builds the same image.
 
 ### Environment Variables
 
