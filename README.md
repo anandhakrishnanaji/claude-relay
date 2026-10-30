@@ -1,6 +1,6 @@
 <!--
   claude-relay: Claude Code API server. A self-hosted OpenAI-compatible and Anthropic-compatible API server for Claude Code.
-  Use your Claude subscription (Pro/Max) or an Anthropic API key from any OpenAI SDK or Anthropic SDK client.
+  Use an Anthropic API key, AWS Bedrock or Google Vertex AI (or your own Claude subscription login, for personal use) from any OpenAI SDK or Anthropic SDK client.
   Python, FastAPI, Claude Agent SDK. MIT licensed.
 -->
 
@@ -13,7 +13,9 @@
   <img src="https://img.shields.io/badge/API-OpenAI%20%2B%20Anthropic%20compatible-8A2BE2" alt="OpenAI and Anthropic compatible API" />
 </p>
 
-**claude-relay is a self-hosted Claude Code API server. It exposes Claude Code through the OpenAI Chat Completions API (`/v1/chat/completions`) and the Anthropic Messages API (`/v1/messages`).** Point any OpenAI or Anthropic client library at it by changing the base URL, and your requests run through Claude Code using your Claude subscription login or an Anthropic API key.
+**claude-relay is a self-hosted Claude Code API server. It exposes Claude Code through the OpenAI Chat Completions API (`/v1/chat/completions`) and the Anthropic Messages API (`/v1/messages`).** Point any OpenAI or Anthropic client library at it by changing the base URL, and your requests run through Claude Code using an Anthropic API key, Bedrock or Vertex, or, for your own personal use, your Claude subscription login (see [Terms Compliance](#terms-compliance)).
+
+![claude-relay demo: start the server, stream a curl request, call it from the OpenAI SDK](docs/demo.gif)
 
 ```python
 from openai import OpenAI
@@ -29,7 +31,7 @@ print(reply.choices[0].message.content)
 **Run it:**
 
 ```bash
-claude auth login          # or: export ANTHROPIC_API_KEY=...
+export ANTHROPIC_API_KEY=...   # or, for personal use: claude auth login
 uvx claude-relay-server    # serves http://localhost:8000/v1
 ```
 
@@ -41,13 +43,14 @@ See [INSTALL.md](./INSTALL.md) for pipx/pip, an always-on service and Docker.
 - **Honours system prompts.** Your system message replaces Claude Code's own prompt on every endpoint, and `/v1/messages` also accepts `system` as a list of text blocks, as the Anthropic SDK sends it.
 - **Tools off by default.** Both endpoints run a single turn without tools, so untrusted text in a prompt can't run commands. To give Claude its Bash/Read/Write tools, the server must set `ALLOW_TOOLS=true` and the request must send `"enable_tools": true`.
 - **Isolated from host settings.** Requests don't load the host's `~/.claude/CLAUDE.md`, settings, skills or plugins. Set `CLAUDE_SETTING_SOURCES=user,project,local` to opt back in.
-- **Flexible auth.** Claude CLI login (subscription), `ANTHROPIC_API_KEY`, AWS Bedrock or Google Vertex AI, auto-detected.
+- **Flexible auth.** `ANTHROPIC_API_KEY`, AWS Bedrock, Google Vertex AI or Claude CLI login (subscription, personal use only; see [Terms Compliance](#terms-compliance)), auto-detected.
 - **Ships deploy tooling.** `scripts/install-service.sh` sets up an always-on systemd user service, and the `Dockerfile` builds a non-root production image. See [Always-on local service](#always-on-local-service-linux-systemd) and [Docker](#docker).
 
 ## What is claude-relay for?
 
 claude-relay is for developers who want to call Claude Code from tools and code written against the OpenAI or Anthropic APIs. Typical uses:
 
+- **Testing your own app locally during development.** Point an app built on the OpenAI or Anthropic SDK at `http://localhost:8000/v1` and run it against a real model on your own machine. This is the personal use that subscription login fits (see [Terms Compliance](#terms-compliance)).
 - Using an existing **OpenAI Python or JavaScript SDK** app with Claude, with only a base-URL change.
 - Connecting **chat UIs, editors and agent frameworks** that accept a custom OpenAI-compatible endpoint.
 - Scripting Claude Code over **plain HTTP/curl** instead of the CLI.
@@ -101,10 +104,10 @@ It runs on the official [Claude Agent SDK](https://pypi.org/project/claude-agent
 
 ### 🔐 **Multi-Provider Authentication**
 - **Automatic detection** of authentication method
-- **Claude CLI auth** - works with existing `claude auth` setup
 - **Direct API key** - `ANTHROPIC_API_KEY` environment variable
 - **AWS Bedrock** - enterprise authentication with AWS credentials
 - **Google Vertex AI** - GCP authentication support
+- **Claude CLI auth** - works with existing `claude auth` setup (personal use only, see [Terms Compliance](#terms-compliance))
 
 ### ⚡ **Advanced Features**
 - **System prompt support** via SDK options
@@ -124,9 +127,9 @@ It runs on the official [Claude Agent SDK](https://pypi.org/project/claude-agent
 
 You need Python 3.10+ (uv fetches it for you) and credentials for Claude:
 
-- a Claude subscription: install the [Claude Code CLI](https://docs.anthropic.com/en/docs/claude-code) and run `claude auth login`, or
 - an Anthropic API key in `ANTHROPIC_API_KEY`, or
-- AWS Bedrock / Google Vertex AI (see [Configuration](#configuration)).
+- AWS Bedrock / Google Vertex AI (see [Configuration](#configuration)), or
+- for your own personal use, a Claude subscription: install the [Claude Code CLI](https://docs.anthropic.com/en/docs/claude-code) and run `claude auth login` (see [Terms Compliance](#terms-compliance)).
 
 ```bash
 uvx claude-relay-server
@@ -679,7 +682,7 @@ curl http://localhost:8000/v1/auth/status | python -m json.tool
 ## FAQ
 
 ### Can I use my Claude Pro or Max subscription with the OpenAI SDK?
-Yes. Run `claude auth login` on the host, start claude-relay, and point the OpenAI SDK's `base_url` at `http://<host>:8000/v1`. Check the [Terms Compliance](#terms-compliance) section first: subscription use is for your own personal use.
+For your own personal use on your own machine, yes: run `claude auth login` on the host, start claude-relay, and point the OpenAI SDK's `base_url` at `http://<host>:8000/v1`. Don't let other people or apps use it through your subscription; Anthropic [doesn't allow](https://code.claude.com/docs/en/legal-and-compliance#authentication-and-credential-use) routing other users' requests through Pro/Max credentials. Read [Terms Compliance](#terms-compliance) first.
 
 ### Does it support streaming?
 Yes, on all three: pass `"stream": true` to get server-sent events. `/v1/messages` streams Anthropic events (`message_start` ... `message_stop`), so `client.messages.stream(...)` in the Anthropic SDK works. Claude Code hands over whole messages, so a short answer usually arrives as one text delta.
@@ -694,7 +697,7 @@ Any model Claude Code accepts, such as `sonnet`, `claude-opus-5-5` and `claude-h
 Set `API_KEY` so clients must send a bearer token, keep tools off unless you need them, and keep it on a private network. See [API Security Configuration](#-api-security-configuration).
 
 ### How is this different from calling the Anthropic API directly?
-Requests go through Claude Code, so you can use a Claude subscription login instead of per-token API billing, and optionally give Claude its coding tools. If you already have an API key and don't need Claude Code, the Anthropic API is simpler.
+Requests go through Claude Code, so you get Claude Code's agent loop and can optionally give Claude its coding tools. If you already have an API key and don't need Claude Code, the Anthropic API is simpler.
 
 ## Terms Compliance
 
@@ -721,11 +724,11 @@ This wrapper does not provide Claude access - it provides an OpenAI-compatible i
 
 | Use Case | Recommended Authentication | Notes |
 |----------|---------------------------|-------|
-| Personal projects | CLI Auth (Pro/Max) or API Key | Acceptable at moderate scale |
+| Personal projects | API Key, or CLI Auth (Pro/Max) | Subscription: only you, on your own machine |
 | Business/Commercial | API Key, Bedrock, or Vertex AI | Use [platform.claude.com](https://platform.claude.com) |
 | High-scale applications | Bedrock or Vertex AI | Enterprise authentication recommended |
 
-**Note on Consumer Plans:** Claude Pro and Max subscriptions are primarily designed for individual, interactive use. Using them through wrappers or automated implementations is acceptable for personal projects at moderate scale. For business use or applications that scale significantly, Anthropic's commercial API offerings at [platform.claude.com](https://platform.claude.com) are more appropriate.
+**Note on Consumer Plans:** Anthropic's [Agent SDK docs](https://code.claude.com/docs/en/agent-sdk/overview) say: "Unless previously approved, Anthropic does not allow third party developers to offer claude.ai login or rate limits for their products, including agents built on the Claude Agent SDK." Its [Claude Code legal page](https://code.claude.com/docs/en/legal-and-compliance#authentication-and-credential-use) adds that developers may not "route requests through Free, Pro, or Max plan credentials on behalf of their users", that it does not prevent "an end user from signing in to the unmodified Claude Code binary with their own Claude subscription", and that Pro/Max limits "assume ordinary, individual usage of Claude Code and the Agent SDK". claude-relay runs the unmodified Claude Code binary and never sees your login, but Anthropic hasn't said whether a self-hosted API in front of it counts as ordinary, individual use. If you use a subscription, use it only for yourself; for anything shared, automated at scale, or commercial, use an API key, Bedrock or Vertex.
 
 ### Authentication Methods
 
@@ -734,11 +737,11 @@ This wrapper does not provide Claude access - it provides an OpenAI-compatible i
 | `ANTHROPIC_API_KEY` | Commercial Terms | Explicitly allowed for programmatic access |
 | AWS Bedrock | Commercial Terms | Explicitly allowed for programmatic access |
 | Google Vertex AI | Commercial Terms | Explicitly allowed for programmatic access |
-| CLI Auth (Pro/Max) | Consumer Terms | Uses official SDK with official auth methods |
+| CLI Auth (Pro/Max) | Consumer Terms | Your own personal use only; not explicitly addressed by Anthropic ([source](https://code.claude.com/docs/en/legal-and-compliance#authentication-and-credential-use)) |
 
 ### CLI Authentication Note
 
-Using CLI auth (`claude auth login`) with this wrapper is functionally equivalent to using Claude Code directly - both use the Claude Agent SDK with your personal subscription. Anthropic provides the SDK with CLI auth support, and this wrapper simply provides an alternative interface format.
+With CLI auth, you sign in through Anthropic's own flow (`claude auth login`) and the wrapper runs the unmodified Claude Code binary bundled with the Agent SDK; the CLI handles your credentials, and the wrapper never stores or forwards them. That doesn't make it the same as using Claude Code interactively: the Consumer Terms bar automated access "except when you are accessing our Services via an Anthropic API Key or where we otherwise explicitly permit it", so treat subscription use as personal and at your own risk.
 
 ### What This Wrapper Does NOT Do
 

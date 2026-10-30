@@ -12,9 +12,9 @@ claude-relay runs as a small HTTP server that speaks the OpenAI (`/v1/chat/compl
 
 - **[uv](https://docs.astral.sh/uv/)** (`curl -LsSf https://astral.sh/uv/install.sh | sh`) or pipx. uv fetches Python 3.10+ if you don't have it.
 - **Credentials for Claude**, one of:
-  - a Claude subscription login: install the [Claude Code CLI](https://docs.anthropic.com/en/docs/claude-code) and run `claude auth login`
   - an Anthropic API key in `ANTHROPIC_API_KEY`
   - AWS Bedrock or Google Vertex AI (see the Configuration section of the [README](./README.md))
+  - for your own personal use, a Claude subscription login: install the [Claude Code CLI](https://docs.anthropic.com/en/docs/claude-code) and run `claude auth login` (see [Terms Compliance](./README.md#terms-compliance))
 
 The Claude Code CLI is bundled with the Python SDK, so Node.js is not required for API-key, Bedrock or Vertex auth. You only need the standalone CLI to run `claude auth login`.
 
