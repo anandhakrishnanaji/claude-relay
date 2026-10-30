@@ -56,7 +56,18 @@ It runs on the official [Claude Agent SDK](https://pypi.org/project/claude-agent
 
 ## Version
 
-**Current Version:** 3.0.0
+**Current Version:** 4.0.0
+- **Safer defaults:** CORS allows no origins (`CORS_ORIGINS=[]`), and a `Host` allow-list (`ALLOWED_HOSTS`) blocks DNS rebinding. Claude Code tools need `ALLOW_TOOLS=true` on the server as well as `"enable_tools": true` in the request.
+- **Real model names:** responses report the model that actually answered. The default is `sonnet`, and non-Claude names like `gpt-4o` get a 400 unless `MODEL_ALIASES` maps them.
+- **New `/v1/responses` endpoint** (OpenAI Responses API, text only, with streaming). `/v1/messages` streams for real and returns Anthropic-style errors.
+- **Effort, thinking and fallback:** `reasoning_effort` / `X-Claude-Effort`, a working thinking budget, and `FALLBACK_MODEL` / `X-Claude-Fallback-Model`.
+- **Accurate responses:** real token usage and stop reasons, no output filtering, a 401 `claude_cli_not_authenticated` when the Claude Code login is missing, and an `error` event when a stream fails.
+- **Sessions:** capped by `MAX_SESSIONS`, `MAX_SESSION_MESSAGES` and `SESSION_TTL_MINUTES`; the session endpoints need the API key when one is set.
+- **Removed:** MCP support, `/v1/compatibility`, `/v1/debug/request`, `FAST_MODEL`, and the `X-Claude-Allowed-Tools` / `X-Claude-Permission-Mode` headers.
+
+**Upgrading from 3.x:** if clients reach the server by any name other than localhost (a LAN IP, a container name, a Tailscale name), add it to `ALLOWED_HOSTS`. Add `MODEL_ALIASES` for clients that send `gpt-*` model names, `ALLOW_TOOLS=true` if they send `enable_tools`, and `CORS_ORIGINS` for browser clients. `MAX_TIMEOUT` is in milliseconds.
+
+**3.0.0:**
 - **Published on PyPI** as `claude-relay-server`: run it with `uvx claude-relay-server`, or install the `claude-relay` command with `uv tool install` / `pipx install`
 - **New `claude-relay` command** with `--host`, `--port`, `--api-key`, `--generate-api-key` and `--env-file`
 - **Binds to `127.0.0.1` by default**, and warns if you expose it without an API key

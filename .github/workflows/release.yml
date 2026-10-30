@@ -38,7 +38,7 @@ jobs:
       # setup-uv with python-version already creates and activates .venv
       - name: Run tests
         run: |
-          uv pip install -e . pytest pytest-asyncio hypothesis requests openai
+          uv pip install -e . pytest pytest-asyncio hypothesis requests openai anthropic
           .venv/bin/python -m pytest tests -q
 
       - name: Build

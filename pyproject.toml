@@ -1,6 +1,6 @@
 [tool.poetry]
 name = "claude-relay-server"
-version = "3.0.0"
+version = "4.0.0"
 description = "Claude Code API server: OpenAI- and Anthropic-compatible endpoints for Claude Code, using your Claude subscription"
 authors = ["A Anandha Krishnan <creattech2000@gmail.com>"]
 readme = "README.md"
