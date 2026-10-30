@@ -135,7 +135,7 @@ class Run:
             async with aclosing(claude_cli.run_completion(**self.args, stream=True)) as sdk:
                 async for chunk in sdk:
                     chunks.append(chunk)
-                    self.model = sdk_usage.extract_model([chunk], self.model)
+                    self.model = sdk_usage.extract_model(chunks, self.model)
                     # Skip the CLI's own error text (reported below) and the ResultMessage,
                     # which repeats the whole answer
                     if chunk.get("error") or sdk_usage.find_result_message([chunk]):

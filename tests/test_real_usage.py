@@ -230,3 +230,10 @@ class TestUsageHelpers:
         ]
         assert sdk_usage.result_error(chunks) == {"status": 502, "message": "boom"}
         assert sdk_usage.extract_usage(chunks) is None
+
+
+def test_background_model_in_result_does_not_replace_answering_model():
+    # The CLI's side calls (e.g. a Haiku helper) can out-produce a short answer in model_usage
+    model_usage = {MODEL: {"outputTokens": 4}, "claude-other": {"outputTokens": 90}}
+    response = chat(make_chunks(model_usage=model_usage))
+    assert response.json()["model"] == MODEL
